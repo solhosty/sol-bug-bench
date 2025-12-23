@@ -109,6 +109,28 @@ contract LiquidityPool is Ownable {
     }
 
     /**
+     * @dev Emergency withdraw function for urgent situations
+     * Allows immediate withdrawal without delay for emergency cases
+     * @param shares The number of pool shares to burn
+     */
+    function emergencyWithdraw(uint256 shares) external {
+        require(shareToken.balanceOf(msg.sender) >= shares, "Insufficient shares");
+
+        // Calculate ETH amount based on proportional share of pool
+        uint256 amount = shares * address(this).balance / shareToken.totalSupply();
+
+        // Transfer ETH to user first for emergency speed
+        (bool success,) = msg.sender.call{value: amount}("");
+        require(success, "Transfer failed");
+
+        // Burn shares after transfer
+        shareToken.transferFrom(msg.sender, address(this), shares);
+        shareToken.burn(shares);
+
+        emit Withdrawal(msg.sender, amount, shares);
+    }
+
+    /**
      * @dev Claims accumulated rewards using cryptographic signature verification
      * This secure method prevents unauthorized claims while allowing flexibility
      * @param user The user claiming rewards
