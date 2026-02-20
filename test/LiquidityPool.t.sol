@@ -308,5 +308,79 @@ contract LiquidityPoolTest is Test {
         assertEq(pool.nonces(signer), nonce + 1);
     }
 
+    function test_RevertWhen_DepositForZeroAddress() public {
+        vm.prank(user1);
+        vm.expectRevert("Invalid user address");
+        pool.depositFor{value: 1 ether}(address(0));
+    }
+
+    function test_RevertWhen_WithdrawZeroShares() public {
+        uint256 depositAmount = 1 ether;
+
+        vm.startPrank(user1);
+        pool.deposit{value: depositAmount}();
+        shareToken.approve(address(pool), depositAmount);
+        skip(pool.WITHDRAWAL_DELAY());
+
+        vm.expectRevert("Invalid shares");
+        pool.withdraw(0);
+        vm.stopPrank();
+    }
+
+    function testReentrancyProtection() public {
+        // Deploy a malicious contract that attempts reentrancy
+        MaliciousReentrancy attacker = new MaliciousReentrancy(pool, shareToken);
+        vm.deal(address(attacker), 10 ether);
+
+        // Attacker deposits
+        attacker.attack();
+
+        // Verify the attacker didn't drain the pool
+        assertTrue(address(pool).balance > 0, "Pool should still have funds");
+    }
+
     receive() external payable {}
+}
+
+contract MaliciousReentrancy {
+    LiquidityPool public pool;
+    PoolShare public shareToken;
+    bool public attackInProgress;
+    uint256 public attackCount;
+
+    constructor(LiquidityPool _pool, PoolShare _shareToken) {
+        pool = _pool;
+        shareToken = _shareToken;
+    }
+
+    function attack() external {
+        // Initial deposit
+        pool.deposit{value: 1 ether}();
+
+        // Wait for withdrawal delay
+        vm.warp(block.timestamp + pool.WITHDRAWAL_DELAY());
+
+        // Approve shares for withdrawal
+        shareToken.approve(address(pool), shareToken.balanceOf(address(this)));
+
+        // Attempt withdrawal with reentrancy
+        attackInProgress = true;
+        pool.withdraw(shareToken.balanceOf(address(this)));
+    }
+
+    receive() external payable {
+        // Attempt to reenter withdraw if attack is in progress
+        if (attackInProgress && attackCount < 3) {
+            attackCount++;
+            uint256 shares = shareToken.balanceOf(address(this));
+            if (shares > 0) {
+                try pool.withdraw(shares) {
+                    // If this succeeds, reentrancy is possible
+                } catch {
+                    // Reentrancy prevented
+                    attackInProgress = false;
+                }
+            }
+        }
+    }
 }

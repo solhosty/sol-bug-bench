@@ -78,6 +78,7 @@ contract LiquidityPool is Ownable {
      */
     function depositFor(address user) external payable {
         require(msg.value > 0, "Invalid deposit");
+        require(user != address(0), "Invalid user address");
         _processDeposit(user, msg.value);
     }
 
@@ -95,16 +96,21 @@ contract LiquidityPool is Ownable {
             "Withdrawal delay not met"
         );
 
-        // Calculate ETH amount based on proportional share of pool
-        uint256 amount = shares * address(this).balance / shareToken.totalSupply();
+        // Validate shares and totalSupply to prevent division by zero
+        uint256 totalSupply = shareToken.totalSupply();
+        require(shares > 0 && totalSupply > 0, "Invalid shares");
 
-        // Transfer ETH to user
+        // Calculate ETH amount based on proportional share of pool
+        uint256 amount = shares * address(this).balance / totalSupply;
+
+        // Transfer shares and burn them before external call (CEI pattern)
+        shareToken.transferFrom(msg.sender, address(this), shares);
+        shareToken.burn(shares);
+
+        // Transfer ETH to user (external call last)
         (bool success,) = msg.sender.call{value: amount}("");
         require(success, "Transfer failed");
 
-        // Burn the shares to maintain proper accounting
-        shareToken.transferFrom(msg.sender, address(this), shares);
-        shareToken.burn(shares);
         emit Withdrawal(msg.sender, amount, shares);
     }
 
