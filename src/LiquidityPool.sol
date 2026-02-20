@@ -4,6 +4,7 @@ pragma solidity ^0.8.0;
 import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Burnable.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "./StableCoin.sol";
 
 /**
@@ -35,7 +36,7 @@ contract PoolShare is ERC20Burnable, Ownable {
  * The pool implements a time-delay mechanism for withdrawals to ensure stability
  * and prevent flash loan attacks.
  */
-contract LiquidityPool is Ownable {
+contract LiquidityPool is Ownable, ReentrancyGuard {
     PoolShare public immutable shareToken;
 
     // User reward balances tracked separately for efficiency
@@ -86,25 +87,17 @@ contract LiquidityPool is Ownable {
      * Enforces withdrawal delay for security against flash loan attacks
      * @param shares The number of pool shares to burn for withdrawal
      */
-    function withdraw(uint256 shares) external {
+    function withdraw(uint256 shares) external nonReentrant {
         require(shareToken.balanceOf(msg.sender) >= shares, "Insufficient shares");
-
-        // Enforce withdrawal delay for security
-        require(
-            block.timestamp >= lastDepositTime[msg.sender] + WITHDRAWAL_DELAY,
-            "Withdrawal delay not met"
-        );
-
-        // Calculate ETH amount based on proportional share of pool
+        require(block.timestamp >= lastDepositTime[msg.sender] + WITHDRAWAL_DELAY, "Withdrawal delay not met");
+        
         uint256 amount = shares * address(this).balance / shareToken.totalSupply();
-
-        // Transfer ETH to user
-        (bool success,) = msg.sender.call{value: amount}("");
-        require(success, "Transfer failed");
-
-        // Burn the shares to maintain proper accounting
+        
         shareToken.transferFrom(msg.sender, address(this), shares);
         shareToken.burn(shares);
+        
+        (bool success,) = msg.sender.call{value: amount}("");
+        require(success, "Transfer failed");
         emit Withdrawal(msg.sender, amount, shares);
     }
 
@@ -121,32 +114,27 @@ contract LiquidityPool is Ownable {
         uint256 amount,
         uint256 nonce,
         bytes memory signature
-    ) external {
+    ) external nonReentrant {
         require(rewards[user] >= amount, "Insufficient rewards");
         require(nonces[user] == nonce, "Invalid nonce");
-
-        // Verify cryptographic signature to prevent unauthorized claims
+        
         bytes32 messageHash = keccak256(abi.encode(user, amount, nonce));
         address signer = ECDSA.recover(messageHash, signature);
         require(signer == user, "Invalid signature");
-
-        // Calculate protocol fee and user amount
-        uint256 fee = amount / 10; // 10% protocol fee
+        
+        uint256 fee = amount / 10;
         uint256 userAmount = amount - fee;
-
-        // Transfer protocol fee to treasury
+        
+        rewards[user] -= amount;
+        nonces[user]++;
+        
         (bool feeSuccess,) = owner().call{value: fee}("");
         require(feeSuccess, "Fee transfer failed");
-
-        // Transfer remaining amount to user
+        
         (bool success,) = msg.sender.call{value: userAmount}("");
-        if (success) {
-            rewards[user] -= amount;
-            nonces[user]++;
-
-            // Emit event for tracking reward claims
-            emit RewardClaimed(user, userAmount);
-        }
+        require(success, "Transfer failed");
+        
+        emit RewardClaimed(user, userAmount);
     }
 
     /**
