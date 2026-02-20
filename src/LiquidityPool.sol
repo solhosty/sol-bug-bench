@@ -4,7 +4,6 @@ pragma solidity ^0.8.0;
 import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Burnable.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
-import "./StableCoin.sol";
 
 /**
  * @title PoolShare
@@ -44,6 +43,9 @@ contract LiquidityPool is Ownable {
     mapping(address => uint256) public nonces;
     // Timestamp tracking for withdrawal delay enforcement
     mapping(address => uint256) public lastDepositTime;
+    // Pending fees and rewards for pull payment pattern
+    mapping(address => uint256) public pendingFees;
+    mapping(address => uint256) public pendingRewards;
 
     // Security delay for withdrawals (24 hours)
     uint256 public constant WITHDRAWAL_DELAY = 1 days;
@@ -134,19 +136,37 @@ contract LiquidityPool is Ownable {
         uint256 fee = amount / 10; // 10% protocol fee
         uint256 userAmount = amount - fee;
 
-        // Transfer protocol fee to treasury
-        (bool feeSuccess,) = owner().call{value: fee}("");
-        require(feeSuccess, "Fee transfer failed");
+        // Effects: update state before external calls
+        rewards[user] -= amount;
+        nonces[user]++;
+        pendingFees[owner()] += fee;
+        pendingRewards[user] += userAmount;
 
-        // Transfer remaining amount to user
-        (bool success,) = msg.sender.call{value: userAmount}("");
-        if (success) {
-            rewards[user] -= amount;
-            nonces[user]++;
+        emit RewardClaimed(user, userAmount);
+    }
 
-            // Emit event for tracking reward claims
-            emit RewardClaimed(user, userAmount);
-        }
+    /**
+     * @dev Allows owner to withdraw accumulated protocol fees
+     * Uses pull payment pattern for security
+     */
+    function withdrawFees() external onlyOwner {
+        uint256 amount = pendingFees[msg.sender];
+        require(amount > 0, "No fees to withdraw");
+        pendingFees[msg.sender] = 0;
+        (bool success,) = msg.sender.call{value: amount}("");
+        require(success, "Fee withdrawal failed");
+    }
+
+    /**
+     * @dev Allows users to withdraw their claimed rewards
+     * Uses pull payment pattern for security
+     */
+    function withdrawRewards() external {
+        uint256 amount = pendingRewards[msg.sender];
+        require(amount > 0, "No rewards to withdraw");
+        pendingRewards[msg.sender] = 0;
+        (bool success,) = msg.sender.call{value: amount}("");
+        require(success, "Reward withdrawal failed");
     }
 
     /**
