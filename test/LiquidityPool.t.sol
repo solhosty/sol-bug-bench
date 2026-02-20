@@ -339,7 +339,183 @@ contract LiquidityPoolTest is Test {
         assertTrue(address(pool).balance > 0, "Pool should still have funds");
     }
 
+    function testReentrancyAttack() public {
+        // Test that nonReentrant modifier prevents reentrancy
+        ReentrancyAttacker attacker = new ReentrancyAttacker(pool, shareToken);
+        vm.deal(address(attacker), 10 ether);
+
+        uint256 poolBalanceBefore = address(pool).balance;
+
+        // Attacker attempts to drain via reentrancy
+        vm.expectRevert();
+        attacker.performAttack();
+
+        // Pool balance should be protected
+        assertGe(address(pool).balance, poolBalanceBefore);
+    }
+
+    function testGriefingAttack() public {
+        // Test that depositFor can be used to grief users by resetting withdrawal timer
+        uint256 firstDeposit = 5 ether;
+        uint256 griefDeposit = 0.001 ether;
+
+        // User1 makes legitimate deposit
+        vm.prank(user1);
+        pool.deposit{value: firstDeposit}();
+
+        // Wait nearly until withdrawal is available
+        skip(pool.WITHDRAWAL_DELAY() - 1 hours);
+
+        // Attacker uses depositFor to reset the timer
+        vm.prank(user2);
+        pool.depositFor{value: griefDeposit}(user1);
+
+        // User1 tries to withdraw but timer was reset
+        vm.startPrank(user1);
+        shareToken.approve(address(pool), shareToken.balanceOf(user1));
+        vm.expectRevert("Withdrawal delay not met");
+        pool.withdraw(shareToken.balanceOf(user1));
+        vm.stopPrank();
+    }
+
+    function test_RevertWhen_ZeroAddressDeposit() public {
+        vm.prank(user1);
+        vm.expectRevert("Invalid user address");
+        pool.depositFor{value: 1 ether}(address(0));
+    }
+
+    function test_RevertWhen_ZeroAddressClaim() public {
+        uint256 privateKey = 0x9999;
+        address signer = vm.addr(privateKey);
+        
+        uint256 nonce = 0;
+        uint256 amount = 0.1 ether;
+        bytes32 messageHash = keccak256(abi.encode(address(0), amount, nonce));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, messageHash);
+        bytes memory signature = abi.encodePacked(r, s, v);
+
+        vm.prank(signer);
+        vm.expectRevert("Zero address");
+        pool.claimReward(address(0), amount, nonce, signature);
+    }
+
+    function testDivisionByZero() public {
+        // This should be prevented by the "Invalid shares" check
+        uint256 depositAmount = 1 ether;
+
+        vm.prank(user1);
+        pool.deposit{value: depositAmount}();
+
+        // Burn all shares to create zero totalSupply scenario
+        vm.startPrank(user1);
+        shareToken.approve(address(pool), shareToken.balanceOf(user1));
+        skip(pool.WITHDRAWAL_DELAY());
+        pool.withdraw(shareToken.balanceOf(user1));
+        vm.stopPrank();
+
+        // Now try to deposit again (should work - first deposit)
+        vm.prank(user2);
+        pool.deposit{value: 1 ether}();
+    }
+
+    function testSmallDepositZeroShares() public {
+        // First user deposits large amount
+        vm.prank(user1);
+        pool.deposit{value: 1000 ether}();
+
+        // Attacker inflates pool balance
+        vm.deal(address(pool), address(pool).balance + 1000000 ether);
+
+        // Small deposit should revert with "Shares too small"
+        vm.prank(user2);
+        vm.expectRevert("Shares too small");
+        pool.deposit{value: 1 wei}();
+    }
+
+    function testWithdrawalDelay() public {
+        uint256 depositAmount = 1 ether;
+
+        vm.startPrank(user1);
+        pool.deposit{value: depositAmount}();
+        shareToken.approve(address(pool), depositAmount);
+
+        // Try to withdraw before delay
+        vm.expectRevert("Withdrawal delay not met");
+        pool.withdraw(depositAmount);
+
+        // Wait exactly the delay period
+        skip(pool.WITHDRAWAL_DELAY());
+
+        // Should succeed now
+        pool.withdraw(depositAmount);
+        vm.stopPrank();
+    }
+
+    function testSignatureVerification() public {
+        uint256 depositAmount = 1 ether;
+        uint256 rewardAmount = 0.05 ether;
+
+        // Create proper signer
+        uint256 privateKey = 0xABCD;
+        address signer = vm.addr(privateKey);
+        vm.deal(signer, 10 ether);
+
+        // Setup: deposit to get rewards
+        vm.prank(signer);
+        pool.deposit{value: depositAmount}();
+
+        // Fund pool for rewards
+        vm.deal(address(pool), address(pool).balance + 1 ether);
+
+        uint256 nonce = pool.nonces(signer);
+        
+        // Create valid signature
+        bytes32 messageHash = keccak256(abi.encode(signer, rewardAmount, nonce));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, messageHash);
+        bytes memory validSignature = abi.encodePacked(r, s, v);
+
+        // Should succeed with valid signature
+        vm.prank(signer);
+        pool.claimReward(signer, rewardAmount, nonce, validSignature);
+
+        // Verify nonce incremented
+        assertEq(pool.nonces(signer), nonce + 1);
+    }
+
     receive() external payable {}
+}
+
+contract ReentrancyAttacker {
+    LiquidityPool public pool;
+    PoolShare public shareToken;
+    uint256 public attackCounter;
+
+    constructor(LiquidityPool _pool, PoolShare _shareToken) {
+        pool = _pool;
+        shareToken = _shareToken;
+    }
+
+    function performAttack() external {
+        // Deposit funds
+        pool.deposit{value: 2 ether}();
+
+        // Wait for delay
+        vm.warp(block.timestamp + pool.WITHDRAWAL_DELAY());
+
+        // Approve shares
+        shareToken.approve(address(pool), shareToken.balanceOf(address(this)));
+
+        // Try to withdraw with reentrancy
+        pool.withdraw(shareToken.balanceOf(address(this)));
+    }
+
+    receive() external payable {
+        attackCounter++;
+        if (attackCounter < 3 && shareToken.balanceOf(address(this)) > 0) {
+            // Attempt reentrancy - should fail with nonReentrant modifier
+            pool.withdraw(shareToken.balanceOf(address(this)));
+        }
+    }
 }
 
 contract MaliciousReentrancy {

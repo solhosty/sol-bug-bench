@@ -4,6 +4,7 @@ pragma solidity ^0.8.0;
 import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Burnable.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "./StableCoin.sol";
 
 /**
@@ -35,7 +36,7 @@ contract PoolShare is ERC20Burnable, Ownable {
  * The pool implements a time-delay mechanism for withdrawals to ensure stability
  * and prevent flash loan attacks.
  */
-contract LiquidityPool is Ownable {
+contract LiquidityPool is Ownable, ReentrancyGuard {
     PoolShare public immutable shareToken;
 
     // User reward balances tracked separately for efficiency
@@ -87,7 +88,7 @@ contract LiquidityPool is Ownable {
      * Enforces withdrawal delay for security against flash loan attacks
      * @param shares The number of pool shares to burn for withdrawal
      */
-    function withdraw(uint256 shares) external {
+    function withdraw(uint256 shares) external nonReentrant {
         require(shareToken.balanceOf(msg.sender) >= shares, "Insufficient shares");
 
         // Enforce withdrawal delay for security
@@ -128,6 +129,7 @@ contract LiquidityPool is Ownable {
         uint256 nonce,
         bytes memory signature
     ) external {
+        require(user != address(0), "Zero address");
         require(rewards[user] >= amount, "Insufficient rewards");
         require(nonces[user] == nonce, "Invalid nonce");
 
@@ -169,7 +171,11 @@ contract LiquidityPool is Ownable {
             shares = amount;
         } else {
             // Subsequent deposits get proportional shares
-            shares = (amount * shareToken.totalSupply()) / address(this).balance;
+            // Use prior balance (before deposit) to prevent donation attacks
+            uint256 priorBalance = address(this).balance - amount;
+            require(priorBalance > 0, "Invalid pool state");
+            shares = (amount * shareToken.totalSupply()) / priorBalance;
+            require(shares > 0, "Shares too small");
         }
 
         // Mint shares to the user
