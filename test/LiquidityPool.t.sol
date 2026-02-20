@@ -4,6 +4,32 @@ pragma solidity ^0.8.0;
 import "forge-std/Test.sol";
 import "../src/LiquidityPool.sol";
 
+contract ReentrancyAttacker {
+    LiquidityPool public pool;
+    address public user;
+    uint256 public nonce;
+    bytes public signature;
+    uint256 public attackCount;
+    
+    constructor(LiquidityPool _pool) {
+        pool = _pool;
+    }
+    
+    receive() external payable {
+        if (attackCount < 2) {
+            attackCount++;
+            pool.claimReward(user, 0.05 ether, nonce, signature);
+        }
+    }
+    
+    function attack(address _user, uint256 _nonce, bytes memory _sig) external {
+        user = _user;
+        nonce = _nonce;
+        signature = _sig;
+        pool.claimReward(_user, 0.05 ether, _nonce, _sig);
+    }
+}
+
 contract LiquidityPoolTest is Test {
     LiquidityPool public pool;
     PoolShare public shareToken;
@@ -306,6 +332,31 @@ contract LiquidityPoolTest is Test {
 
         // Verify nonce was incremented only on success
         assertEq(pool.nonces(signer), nonce + 1);
+    }
+
+    function test_ReentrancyClaimReward() public {
+        uint256 depositAmount = 1 ether;
+        uint256 rewardAmount = 0.05 ether;
+        
+        uint256 privateKey = 0x9999;
+        address signer = vm.addr(privateKey);
+        vm.deal(signer, 10 ether);
+        
+        vm.prank(signer);
+        pool.deposit{value: depositAmount}();
+        vm.deal(address(pool), address(pool).balance + 1 ether);
+        
+        uint256 nonce = pool.nonces(signer);
+        bytes32 messageHash = keccak256(abi.encode(signer, rewardAmount, nonce));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, messageHash);
+        bytes memory signature = abi.encodePacked(r, s, v);
+        
+        ReentrancyAttacker attacker = new ReentrancyAttacker(pool);
+        vm.prank(signer);
+        attacker.attack(signer, nonce, signature);
+        
+        assertEq(pool.nonces(signer), nonce + 1);
+        assertEq(attacker.attackCount(), 1); // Only one successful claim
     }
 
     receive() external payable {}
