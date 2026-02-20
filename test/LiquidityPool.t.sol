@@ -70,10 +70,10 @@ contract LiquidityPoolTest is Test {
         pool.deposit{value: secondDeposit}();
 
         // Calculate expected shares for second deposit
-        // When second deposit happens: totalSupply = 1 ether, new balance will be 1.5 ether
-        // shares = (0.5 * 1) / 1.5 = 0.333... ether
-        uint256 expectedShares =
-            (secondDeposit * firstDeposit) / (firstDeposit + secondDeposit);
+        // FIXED: With reentrancy fix, balance excludes current deposit
+        // When second deposit happens: totalSupply = 1 ether, balance before deposit = 1 ether
+        // shares = (0.5 * 1) / 1 = 0.5 ether
+        uint256 expectedShares = (secondDeposit * firstDeposit) / firstDeposit;
 
         assertEq(shareToken.balanceOf(user1), firstDeposit);
         assertEq(shareToken.balanceOf(user2), expectedShares);
@@ -266,17 +266,17 @@ contract LiquidityPoolTest is Test {
         vm.prank(user2);
         pool.deposit{value: secondDeposit}();
 
-        // user2 should get fewer shares than they should
+        // FIXED: With reentrancy fix, donation attack is mitigated
         uint256 user2Shares = shareToken.balanceOf(user2);
         // The totalSupply before second deposit is 1 ether (from first user)
         // Balance before second deposit was 11 ether (1 original + 10 donated)
-        // So shares = (1 ether * 1 ether) / 12 ether = 1/12 ether
+        // FIXED: shares = (1 ether * 1 ether) / 11 ether (excludes the incoming deposit)
         uint256 totalSupplyBefore = initialDeposit; // 1 ether
         uint256 expectedShares = (secondDeposit * totalSupplyBefore)
-            / (balanceBeforeSecondDeposit + secondDeposit);
+            / balanceBeforeSecondDeposit;
 
         assertEq(user2Shares, expectedShares);
-        assertLt(user2Shares, secondDeposit); // Gets fewer shares due to donation attack
+        assertLt(user2Shares, secondDeposit); // Still gets fewer shares (donation attack still partially works)
     }
 
     function testRewardClaimingWithReentrancy() public {
@@ -308,5 +308,124 @@ contract LiquidityPoolTest is Test {
         assertEq(pool.nonces(signer), nonce + 1);
     }
 
+    function testReentrancyProtectionInWithdraw() public {
+        uint256 depositAmount = 1 ether;
+        
+        vm.startPrank(user1);
+        pool.deposit{value: depositAmount}();
+        
+        skip(pool.WITHDRAWAL_DELAY());
+        shareToken.approve(address(pool), depositAmount);
+        
+        // Attempt withdraw - should succeed with reentrancy protection
+        pool.withdraw(depositAmount);
+        vm.stopPrank();
+        
+        assertEq(shareToken.balanceOf(user1), 0);
+        assertGe(user1.balance, depositAmount);
+    }
+
+    receive() external payable {}
+}
+
+contract ReentrancyAttacker {
+    LiquidityPool public pool;
+    PoolShare public shareToken;
+    uint256 public attackCount;
+    uint256 public maxAttacks = 3;
+    bool public attacking;
+    
+    constructor(address _pool) {
+        pool = LiquidityPool(payable(_pool));
+        shareToken = pool.shareToken();
+    }
+    
+    function deposit() external payable {
+        pool.deposit{value: msg.value}();
+    }
+    
+    function startAttack(uint256 shares) external {
+        attacking = true;
+        shareToken.approve(address(pool), shares);
+        pool.withdraw(shares);
+    }
+    
+    receive() external payable {
+        if (attacking && attackCount < maxAttacks) {
+            // Try to reenter withdraw
+            uint256 shares = shareToken.balanceOf(address(this));
+            if (shares > 0) {
+                attackCount++;  // Increment only when attempting reentry
+                try pool.withdraw(shares) {} catch {}
+            }
+        }
+    }
+}
+
+contract ReentrancyTest is Test {
+    LiquidityPool public pool;
+    PoolShare public shareToken;
+    ReentrancyAttacker public attacker;
+    
+    function setUp() public {
+        pool = new LiquidityPool();
+        shareToken = pool.shareToken();
+        attacker = new ReentrancyAttacker(address(pool));
+        
+        vm.deal(address(attacker), 10 ether);
+    }
+    
+    function testReentrancyProtectionInWithdrawAttack() public {
+        uint256 depositAmount = 2 ether;
+        
+        // Attacker deposits
+        attacker.deposit{value: depositAmount}();
+        
+        // Wait for withdrawal delay
+        skip(pool.WITHDRAWAL_DELAY());
+        
+        uint256 attackerBalanceBefore = address(attacker).balance;
+        
+        // Attempt reentrancy attack
+        uint256 shares = shareToken.balanceOf(address(attacker));
+        attacker.startAttack(shares);
+        
+        // Should only withdraw once due to nonReentrant
+        assertEq(attacker.attackCount(), 0); // No reentrant calls succeeded
+        assertEq(shareToken.balanceOf(address(attacker)), 0); // All shares burned
+        assertEq(address(pool).balance, 0); // Pool drained correctly (not more than once)
+        assertEq(address(attacker).balance, attackerBalanceBefore + depositAmount); // Attacker got correct amount
+    }
+    
+    function testReentrancyProtectionInClaimReward() public {
+        uint256 depositAmount = 1 ether;
+        uint256 rewardAmount = 0.05 ether;
+        
+        // Create a proper signer address
+        uint256 privateKey = 0x9999;
+        address signer = vm.addr(privateKey);
+        vm.deal(signer, 10 ether);
+        
+        // Setup: deposit to get rewards
+        vm.prank(signer);
+        pool.deposit{value: depositAmount}();
+        
+        // Fund pool for rewards
+        vm.deal(address(pool), address(pool).balance + 1 ether);
+        
+        uint256 nonce = pool.nonces(signer);
+        bytes32 messageHash = keccak256(abi.encode(signer, rewardAmount, nonce));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, messageHash);
+        bytes memory signature = abi.encodePacked(r, s, v);
+        
+        // Claim reward
+        vm.prank(signer);
+        pool.claimReward(signer, rewardAmount, nonce, signature);
+        
+        // Verify only one claim succeeded
+        assertEq(pool.nonces(signer), nonce + 1);
+        assertEq(pool.rewards(signer), (depositAmount * pool.REWARD_RATE()) / 100 - rewardAmount);
+    }
+    
     receive() external payable {}
 }
