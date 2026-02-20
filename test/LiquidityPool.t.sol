@@ -249,34 +249,31 @@ contract LiquidityPoolTest is Test {
     }
 
     function testShareCalculationVulnerableToInflation() public {
-        // This tests the donation attack vulnerability
+        // This tests that the donation attack is now prevented
         uint256 initialDeposit = 1 ether;
 
         // First deposit
         vm.prank(user1);
         pool.deposit{value: initialDeposit}();
 
-        // Attacker sends ETH directly to inflate the pool balance
+        // Attacker sends ETH directly to try to inflate the pool balance
         vm.deal(address(pool), address(pool).balance + 10 ether);
 
-        // Second deposit gets fewer shares due to inflated balance
+        // Second deposit should now get correct shares (not affected by donation)
         uint256 secondDeposit = 1 ether;
-        uint256 balanceBeforeSecondDeposit = address(pool).balance;
 
         vm.prank(user2);
         pool.deposit{value: secondDeposit}();
 
-        // user2 should get fewer shares than they should
+        // user2 should get equal shares as user1 since they deposited the same amount
         uint256 user2Shares = shareToken.balanceOf(user2);
-        // The totalSupply before second deposit is 1 ether (from first user)
-        // Balance before second deposit was 11 ether (1 original + 10 donated)
-        // So shares = (1 ether * 1 ether) / 12 ether = 1/12 ether
-        uint256 totalSupplyBefore = initialDeposit; // 1 ether
-        uint256 expectedShares = (secondDeposit * totalSupplyBefore)
-            / (balanceBeforeSecondDeposit + secondDeposit);
+        // With the fix, shares are calculated based on poolBalance (tracked internally)
+        // not address(this).balance, so the donated ETH doesn't affect the calculation
+        // shares = (1 ether * 1 ether) / 1 ether = 1 ether
+        uint256 expectedShares = initialDeposit;
 
         assertEq(user2Shares, expectedShares);
-        assertLt(user2Shares, secondDeposit); // Gets fewer shares due to donation attack
+        assertEq(user2Shares, secondDeposit); // Gets correct shares, donation attack prevented
     }
 
     function testRewardClaimingWithReentrancy() public {

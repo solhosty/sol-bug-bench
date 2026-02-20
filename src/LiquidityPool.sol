@@ -3,6 +3,7 @@ pragma solidity ^0.8.0;
 
 import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Burnable.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import "./StableCoin.sol";
 
@@ -35,9 +36,11 @@ contract PoolShare is ERC20Burnable, Ownable {
  * The pool implements a time-delay mechanism for withdrawals to ensure stability
  * and prevent flash loan attacks.
  */
-contract LiquidityPool is Ownable {
+contract LiquidityPool is Ownable, ReentrancyGuard {
     PoolShare public immutable shareToken;
 
+    // Pool balance tracking to prevent flashloan manipulation
+    uint256 private poolBalance;
     // User reward balances tracked separately for efficiency
     mapping(address => uint256) public rewards;
     // Nonces for signature verification to prevent replay attacks
@@ -96,7 +99,10 @@ contract LiquidityPool is Ownable {
         );
 
         // Calculate ETH amount based on proportional share of pool
-        uint256 amount = shares * address(this).balance / shareToken.totalSupply();
+        uint256 amount = shares * poolBalance / shareToken.totalSupply();
+
+        // Update pool balance before transfer
+        poolBalance -= amount;
 
         // Transfer ETH to user
         (bool success,) = msg.sender.call{value: amount}("");
@@ -121,7 +127,7 @@ contract LiquidityPool is Ownable {
         uint256 amount,
         uint256 nonce,
         bytes memory signature
-    ) external {
+    ) external nonReentrant {
         require(rewards[user] >= amount, "Insufficient rewards");
         require(nonces[user] == nonce, "Invalid nonce");
 
@@ -134,19 +140,20 @@ contract LiquidityPool is Ownable {
         uint256 fee = amount / 10; // 10% protocol fee
         uint256 userAmount = amount - fee;
 
+        // Update state before transfers
+        rewards[user] -= amount;
+        nonces[user]++;
+
         // Transfer protocol fee to treasury
         (bool feeSuccess,) = owner().call{value: fee}("");
         require(feeSuccess, "Fee transfer failed");
 
         // Transfer remaining amount to user
         (bool success,) = msg.sender.call{value: userAmount}("");
-        if (success) {
-            rewards[user] -= amount;
-            nonces[user]++;
+        require(success, "User transfer failed");
 
-            // Emit event for tracking reward claims
-            emit RewardClaimed(user, userAmount);
-        }
+        // Emit event for tracking reward claims
+        emit RewardClaimed(user, userAmount);
     }
 
     /**
@@ -162,9 +169,12 @@ contract LiquidityPool is Ownable {
             // First deposit gets 1:1 share ratio
             shares = amount;
         } else {
-            // Subsequent deposits get proportional shares
-            shares = (amount * shareToken.totalSupply()) / address(this).balance;
+            // Subsequent deposits get proportional shares based on tracked balance
+            shares = (amount * shareToken.totalSupply()) / poolBalance;
         }
+
+        // Update pool balance
+        poolBalance += amount;
 
         // Mint shares to the user
         shareToken.mint(user, shares);
