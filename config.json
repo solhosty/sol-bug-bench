@@ -1,0 +1,17 @@
+{
+  "agent": {
+    "build": {
+      "maxSteps": 50,
+      "options": {},
+      "permission": {},
+      "steps": 50
+    }
+  },
+  "permission": {
+    "edit": "allow",
+    "bash": "allow",
+    "webfetch": "allow",
+    "doom_loop": "allow",
+    "external_directory": "allow"
+  }
+}
