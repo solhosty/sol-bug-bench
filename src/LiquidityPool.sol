@@ -4,6 +4,7 @@ pragma solidity ^0.8.0;
 import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Burnable.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "./StableCoin.sol";
 
 /**
@@ -35,7 +36,7 @@ contract PoolShare is ERC20Burnable, Ownable {
  * The pool implements a time-delay mechanism for withdrawals to ensure stability
  * and prevent flash loan attacks.
  */
-contract LiquidityPool is Ownable {
+contract LiquidityPool is Ownable, ReentrancyGuard {
     PoolShare public immutable shareToken;
 
     // User reward balances tracked separately for efficiency
@@ -78,6 +79,7 @@ contract LiquidityPool is Ownable {
      */
     function depositFor(address user) external payable {
         require(msg.value > 0, "Invalid deposit");
+        require(user != address(0), "Invalid user address");
         _processDeposit(user, msg.value);
     }
 
@@ -86,7 +88,8 @@ contract LiquidityPool is Ownable {
      * Enforces withdrawal delay for security against flash loan attacks
      * @param shares The number of pool shares to burn for withdrawal
      */
-    function withdraw(uint256 shares) external {
+    function withdraw(uint256 shares) external nonReentrant {
+        require(shares > 0, "Shares must be > 0");
         require(shareToken.balanceOf(msg.sender) >= shares, "Insufficient shares");
 
         // Enforce withdrawal delay for security
@@ -95,16 +98,19 @@ contract LiquidityPool is Ownable {
             "Withdrawal delay not met"
         );
 
+        require(shareToken.totalSupply() > 0, "No shares in pool");
+
         // Calculate ETH amount based on proportional share of pool
         uint256 amount = shares * address(this).balance / shareToken.totalSupply();
+
+        // Burn the shares to maintain proper accounting (effects before interaction)
+        shareToken.transferFrom(msg.sender, address(this), shares);
+        shareToken.burn(shares);
 
         // Transfer ETH to user
         (bool success,) = msg.sender.call{value: amount}("");
         require(success, "Transfer failed");
 
-        // Burn the shares to maintain proper accounting
-        shareToken.transferFrom(msg.sender, address(this), shares);
-        shareToken.burn(shares);
         emit Withdrawal(msg.sender, amount, shares);
     }
 
@@ -121,7 +127,9 @@ contract LiquidityPool is Ownable {
         uint256 amount,
         uint256 nonce,
         bytes memory signature
-    ) external {
+    ) external nonReentrant {
+        require(user != address(0), "Invalid user address");
+        require(amount > 0, "Amount must be > 0");
         require(rewards[user] >= amount, "Insufficient rewards");
         require(nonces[user] == nonce, "Invalid nonce");
 
@@ -134,19 +142,20 @@ contract LiquidityPool is Ownable {
         uint256 fee = amount / 10; // 10% protocol fee
         uint256 userAmount = amount - fee;
 
+        // Update state before external calls (effects before interaction)
+        rewards[user] -= amount;
+        nonces[user]++;
+
         // Transfer protocol fee to treasury
         (bool feeSuccess,) = owner().call{value: fee}("");
         require(feeSuccess, "Fee transfer failed");
 
         // Transfer remaining amount to user
         (bool success,) = msg.sender.call{value: userAmount}("");
-        if (success) {
-            rewards[user] -= amount;
-            nonces[user]++;
+        require(success, "User transfer failed");
 
-            // Emit event for tracking reward claims
-            emit RewardClaimed(user, userAmount);
-        }
+        // Emit event for tracking reward claims
+        emit RewardClaimed(user, userAmount);
     }
 
     /**
@@ -163,8 +172,11 @@ contract LiquidityPool is Ownable {
             shares = amount;
         } else {
             // Subsequent deposits get proportional shares
-            shares = (amount * shareToken.totalSupply()) / address(this).balance;
+            // Use balance before deposit to prevent zero shares for small deposits
+            shares = (amount * shareToken.totalSupply()) / (address(this).balance - amount);
         }
+
+        require(shares > 0, "Shares must be > 0");
 
         // Mint shares to the user
         shareToken.mint(user, shares);
