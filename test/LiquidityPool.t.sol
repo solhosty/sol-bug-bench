@@ -225,6 +225,50 @@ contract LiquidityPoolTest is Test {
         pool.claimReward(user1, rewardAmount, nonce, signature);
     }
 
+    function test_RevertWhen_ClaimRewardZeroAmount() public {
+        uint256 depositAmount = 1 ether;
+
+        vm.prank(user1);
+        pool.deposit{value: depositAmount}();
+
+        uint256 nonce = pool.nonces(user1);
+        bytes32 messageHash = keccak256(abi.encode(user1, 0, nonce));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(1, messageHash);
+        bytes memory signature = abi.encodePacked(r, s, v);
+
+        vm.prank(user1);
+        vm.expectRevert("Amount must be > 0");
+        pool.claimReward(user1, 0, nonce, signature);
+    }
+
+    function testClaimRewardMinimumAmount() public {
+        uint256 depositAmount = 1 ether;
+        uint256 minimumAmount = 1 wei;
+
+        // Create a proper signer address
+        uint256 privateKey = 0x1234;
+        address signer = vm.addr(privateKey);
+        vm.deal(signer, 10 ether);
+
+        // Setup: deposit to get rewards with the signer
+        vm.prank(signer);
+        pool.deposit{value: depositAmount}();
+
+        // Fund the pool with ETH for reward payments
+        vm.deal(address(pool), address(pool).balance + 1 ether);
+
+        uint256 nonce = pool.nonces(signer);
+        bytes32 messageHash = keccak256(abi.encode(signer, minimumAmount, nonce));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, messageHash);
+        bytes memory signature = abi.encodePacked(r, s, v);
+
+        vm.prank(signer);
+        pool.claimReward(signer, minimumAmount, nonce, signature);
+
+        assertEq(pool.nonces(signer), nonce + 1);
+        assertEq(pool.rewards(signer), (depositAmount * pool.REWARD_RATE()) / 100 - minimumAmount);
+    }
+
     function testDepositForResetsWithdrawalTimer() public {
         uint256 firstDeposit = 1 ether;
         uint256 secondDeposit = 0.5 ether;

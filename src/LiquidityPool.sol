@@ -4,7 +4,6 @@ pragma solidity ^0.8.0;
 import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Burnable.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
-import "./StableCoin.sol";
 
 /**
  * @title PoolShare
@@ -122,6 +121,7 @@ contract LiquidityPool is Ownable {
         uint256 nonce,
         bytes memory signature
     ) external {
+        require(amount > 0, "Amount must be > 0");
         require(rewards[user] >= amount, "Insufficient rewards");
         require(nonces[user] == nonce, "Invalid nonce");
 
