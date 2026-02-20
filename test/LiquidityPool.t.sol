@@ -4,6 +4,74 @@ pragma solidity ^0.8.0;
 import "forge-std/Test.sol";
 import "../src/LiquidityPool.sol";
 
+contract ReentrancyAttacker {
+    LiquidityPool public pool;
+    PoolShare public shareToken;
+    uint256 public attackCount;
+    uint256 public maxAttacks = 3;
+    
+    constructor(LiquidityPool _pool) {
+        pool = _pool;
+        shareToken = pool.shareToken();
+    }
+    
+    function attack() external payable {
+        pool.deposit{value: msg.value}();
+        shareToken.approve(address(pool), type(uint256).max);
+    }
+    
+    function startWithdrawAttack(uint256 shares) external {
+        attackCount = 0;
+        pool.withdraw(shares);
+    }
+    
+    receive() external payable {
+        if (attackCount < maxAttacks && shareToken.balanceOf(address(this)) > 0) {
+            attackCount++;
+            pool.withdraw(shareToken.balanceOf(address(this)));
+        }
+    }
+}
+
+contract RewardClaimAttacker {
+    LiquidityPool public pool;
+    uint256 public attackCount;
+    uint256 public maxAttacks = 3;
+    address public user;
+    uint256 public amount;
+    uint256 public nonce;
+    bytes public signature;
+    
+    constructor(LiquidityPool _pool) {
+        pool = _pool;
+    }
+    
+    function setupAttack(
+        address _user,
+        uint256 _amount,
+        uint256 _nonce,
+        bytes memory _signature
+    ) external {
+        user = _user;
+        amount = _amount;
+        nonce = _nonce;
+        signature = _signature;
+    }
+    
+    function attack() external {
+        attackCount = 0;
+        pool.claimReward(user, amount, nonce, signature);
+    }
+    
+    receive() external payable {
+        if (attackCount < maxAttacks) {
+            attackCount++;
+            // Attempt to re-enter claimReward
+            pool.claimReward(user, amount, nonce + attackCount, signature);
+        }
+    }
+}
+
 contract LiquidityPoolTest is Test {
     LiquidityPool public pool;
     PoolShare public shareToken;
@@ -306,6 +374,56 @@ contract LiquidityPoolTest is Test {
 
         // Verify nonce was incremented only on success
         assertEq(pool.nonces(signer), nonce + 1);
+    }
+
+    function testReentrancyAttackOnWithdraw() public {
+        // Deploy attacker contract
+        ReentrancyAttacker attacker = new ReentrancyAttacker(pool);
+        
+        // Fund the attacker
+        vm.deal(address(attacker), 10 ether);
+        
+        // Attacker deposits
+        attacker.attack{value: 2 ether}();
+        
+        // Wait for withdrawal delay
+        skip(pool.WITHDRAWAL_DELAY());
+        
+        uint256 poolBalanceBefore = address(pool).balance;
+        uint256 attackerSharesBefore = shareToken.balanceOf(address(attacker));
+        
+        // Attempt reentrancy attack - should fail with ReentrancyGuard
+        vm.expectRevert();
+        attacker.startWithdrawAttack(attackerSharesBefore);
+    }
+    
+    function testReentrancyAttackOnClaimReward() public {
+        // Create a proper signer address
+        uint256 privateKey = 0x9999;
+        address signer = vm.addr(privateKey);
+        vm.deal(signer, 10 ether);
+        
+        // Setup: deposit to get rewards with the signer
+        vm.prank(signer);
+        pool.deposit{value: 1 ether}();
+        
+        // Fund the pool for reward payments
+        vm.deal(address(pool), address(pool).balance + 5 ether);
+        
+        // Deploy attacker contract that will try to reenter
+        RewardClaimAttacker attacker = new RewardClaimAttacker(pool);
+        
+        uint256 rewardAmount = 0.05 ether;
+        uint256 nonce = pool.nonces(signer);
+        bytes32 messageHash = keccak256(abi.encode(signer, rewardAmount, nonce));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, messageHash);
+        bytes memory signature = abi.encodePacked(r, s, v);
+        
+        // The attacker should not be able to drain rewards through reentrancy
+        // This should revert with ReentrancyGuard
+        attacker.setupAttack(signer, rewardAmount, nonce, signature);
+        vm.expectRevert();
+        attacker.attack();
     }
 
     receive() external payable {}
