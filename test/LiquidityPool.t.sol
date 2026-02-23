@@ -136,6 +136,72 @@ contract LiquidityPoolTest is Test {
         assertLt(pool.rewards(signer), (depositAmount * pool.REWARD_RATE()) / 100); // Rewards decreased
     }
 
+    function testClaimRewardCannotRedirectToCaller() public {
+        uint256 depositAmount = 1 ether;
+        uint256 rewardAmount = 0.05 ether;
+        uint256 privateKey = 0x9876;
+        address signer = vm.addr(privateKey);
+        address attacker = makeAddr("attacker");
+
+        vm.deal(signer, 10 ether);
+        vm.deal(attacker, 1 ether);
+
+        vm.prank(signer);
+        pool.deposit{value: depositAmount}();
+
+        vm.deal(address(pool), address(pool).balance + 1 ether);
+
+        uint256 nonce = pool.nonces(signer);
+        bytes32 messageHash = keccak256(abi.encode(signer, rewardAmount, nonce));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, messageHash);
+        bytes memory signature = abi.encodePacked(r, s, v);
+
+        uint256 fee = rewardAmount / 10;
+        uint256 userAmount = rewardAmount - fee;
+        uint256 signerBalanceBefore = signer.balance;
+        uint256 attackerBalanceBefore = attacker.balance;
+        uint256 ownerBalanceBefore = address(this).balance;
+
+        vm.txGasPrice(0);
+        vm.prank(attacker);
+        pool.claimReward(signer, rewardAmount, nonce, signature);
+
+        assertEq(signer.balance, signerBalanceBefore + userAmount);
+        assertEq(attacker.balance, attackerBalanceBefore);
+        assertEq(address(this).balance, ownerBalanceBefore + fee);
+    }
+
+    function testClaimRewardUpdatesAccountingOnSuccess() public {
+        uint256 depositAmount = 1 ether;
+        uint256 rewardAmount = 0.05 ether;
+        uint256 privateKey = 0x2468;
+        address signer = vm.addr(privateKey);
+
+        vm.deal(signer, 10 ether);
+
+        vm.prank(signer);
+        pool.deposit{value: depositAmount}();
+
+        vm.deal(address(pool), address(pool).balance + 1 ether);
+
+        uint256 nonce = pool.nonces(signer);
+        bytes32 messageHash = keccak256(abi.encode(signer, rewardAmount, nonce));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, messageHash);
+        bytes memory signature = abi.encodePacked(r, s, v);
+
+        uint256 rewardsBefore = pool.rewards(signer);
+        uint256 fee = rewardAmount / 10;
+        uint256 userAmount = rewardAmount - fee;
+        uint256 signerBalanceBefore = signer.balance;
+
+        vm.prank(signer);
+        pool.claimReward(signer, rewardAmount, nonce, signature);
+
+        assertEq(pool.rewards(signer), rewardsBefore - rewardAmount);
+        assertEq(pool.nonces(signer), nonce + 1);
+        assertEq(signer.balance, signerBalanceBefore + userAmount);
+    }
+
     function test_RevertWhen_ZeroDeposit() public {
         vm.prank(user1);
         vm.expectRevert("Invalid deposit");
