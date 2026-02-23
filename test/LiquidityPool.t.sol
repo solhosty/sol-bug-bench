@@ -43,6 +43,7 @@ contract LiquidityPoolTest is Test {
         assertEq(pool.rewards(user1), (depositAmount * pool.REWARD_RATE()) / 100);
         assertEq(pool.lastDepositTime(user1), block.timestamp);
         assertEq(address(pool).balance, depositAmount);
+        assertEq(pool.totalDeposited(), depositAmount);
     }
 
     function testDepositFor() public {
@@ -55,6 +56,7 @@ contract LiquidityPoolTest is Test {
         assertEq(pool.rewards(user1), (depositAmount * pool.REWARD_RATE()) / 100);
         assertEq(pool.lastDepositTime(user1), block.timestamp);
         assertEq(address(pool).balance, depositAmount);
+        assertEq(pool.totalDeposited(), depositAmount);
     }
 
     function testMultipleDeposits() public {
@@ -78,6 +80,7 @@ contract LiquidityPoolTest is Test {
         assertEq(shareToken.balanceOf(user1), firstDeposit);
         assertEq(shareToken.balanceOf(user2), expectedShares);
         assertEq(address(pool).balance, firstDeposit + secondDeposit);
+        assertEq(pool.totalDeposited(), firstDeposit + secondDeposit);
     }
 
     function testWithdraw() public {
@@ -106,6 +109,7 @@ contract LiquidityPoolTest is Test {
 
         assertEq(user1.balance, balanceBefore + expectedAmount);
         assertEq(shareToken.balanceOf(user1), depositAmount - withdrawShares);
+        assertEq(pool.totalDeposited(), depositAmount - withdrawShares);
     }
 
     function testClaimReward() public {
@@ -125,15 +129,48 @@ contract LiquidityPoolTest is Test {
         vm.deal(address(pool), address(pool).balance + 1 ether);
 
         uint256 nonce = pool.nonces(signer);
-        bytes32 messageHash = keccak256(abi.encode(signer, rewardAmount, nonce));
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, messageHash);
+        bytes32 structHash = keccak256(
+            abi.encode(pool.CLAIM_TYPEHASH(), signer, signer, rewardAmount, nonce)
+        );
+        bytes32 digest = keccak256(
+            abi.encodePacked("\x19\x01", pool.domainSeparator(), structHash)
+        );
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, digest);
         bytes memory signature = abi.encodePacked(r, s, v);
 
         vm.prank(signer);
-        pool.claimReward(signer, rewardAmount, nonce, signature);
+        pool.claimReward(signer, signer, rewardAmount, nonce, signature);
 
         assertEq(pool.nonces(signer), nonce + 1);
         assertLt(pool.rewards(signer), (depositAmount * pool.REWARD_RATE()) / 100); // Rewards decreased
+    }
+
+    function test_RevertWhen_ClaimRewardInvalidRecipient() public {
+        uint256 depositAmount = 1 ether;
+        uint256 rewardAmount = 0.05 ether;
+
+        uint256 privateKey = 0x1234;
+        address signer = vm.addr(privateKey);
+        vm.deal(signer, 10 ether);
+
+        vm.prank(signer);
+        pool.deposit{value: depositAmount}();
+
+        vm.deal(address(pool), address(pool).balance + 1 ether);
+
+        uint256 nonce = pool.nonces(signer);
+        bytes32 structHash = keccak256(
+            abi.encode(pool.CLAIM_TYPEHASH(), signer, signer, rewardAmount, nonce)
+        );
+        bytes32 digest = keccak256(
+            abi.encodePacked("\x19\x01", pool.domainSeparator(), structHash)
+        );
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, digest);
+        bytes memory signature = abi.encodePacked(r, s, v);
+
+        vm.prank(user1);
+        vm.expectRevert("Invalid recipient");
+        pool.claimReward(signer, user1, rewardAmount, nonce, signature);
     }
 
     function test_RevertWhen_ZeroDeposit() public {
@@ -182,13 +219,18 @@ contract LiquidityPoolTest is Test {
         pool.deposit{value: depositAmount}();
 
         uint256 nonce = pool.nonces(user1);
-        bytes32 messageHash = keccak256(abi.encode(user1, excessiveReward, nonce));
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(1, messageHash);
+        bytes32 structHash = keccak256(
+            abi.encode(pool.CLAIM_TYPEHASH(), user1, user1, excessiveReward, nonce)
+        );
+        bytes32 digest = keccak256(
+            abi.encodePacked("\x19\x01", pool.domainSeparator(), structHash)
+        );
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(1, digest);
         bytes memory signature = abi.encodePacked(r, s, v);
 
         vm.prank(user1);
         vm.expectRevert("Insufficient rewards");
-        pool.claimReward(user1, excessiveReward, nonce, signature);
+        pool.claimReward(user1, user1, excessiveReward, nonce, signature);
     }
 
     function test_RevertWhen_ClaimRewardInvalidNonce() public {
@@ -199,13 +241,18 @@ contract LiquidityPoolTest is Test {
         pool.deposit{value: depositAmount}();
 
         uint256 wrongNonce = pool.nonces(user1) + 1;
-        bytes32 messageHash = keccak256(abi.encode(user1, rewardAmount, wrongNonce));
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(1, messageHash);
+        bytes32 structHash = keccak256(
+            abi.encode(pool.CLAIM_TYPEHASH(), user1, user1, rewardAmount, wrongNonce)
+        );
+        bytes32 digest = keccak256(
+            abi.encodePacked("\x19\x01", pool.domainSeparator(), structHash)
+        );
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(1, digest);
         bytes memory signature = abi.encodePacked(r, s, v);
 
         vm.prank(user1);
         vm.expectRevert("Invalid nonce");
-        pool.claimReward(user1, rewardAmount, wrongNonce, signature);
+        pool.claimReward(user1, user1, rewardAmount, wrongNonce, signature);
     }
 
     function test_RevertWhen_ClaimRewardInvalidSignature() public {
@@ -216,13 +263,18 @@ contract LiquidityPoolTest is Test {
         pool.deposit{value: depositAmount}();
 
         uint256 nonce = pool.nonces(user1);
-        bytes32 messageHash = keccak256(abi.encode(user1, rewardAmount, nonce));
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(2, messageHash); // Wrong private key
+        bytes32 structHash = keccak256(
+            abi.encode(pool.CLAIM_TYPEHASH(), user1, user1, rewardAmount, nonce)
+        );
+        bytes32 digest = keccak256(
+            abi.encodePacked("\x19\x01", pool.domainSeparator(), structHash)
+        );
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(2, digest); // Wrong private key
         bytes memory signature = abi.encodePacked(r, s, v);
 
         vm.prank(user1);
         vm.expectRevert("Invalid signature");
-        pool.claimReward(user1, rewardAmount, nonce, signature);
+        pool.claimReward(user1, user1, rewardAmount, nonce, signature);
     }
 
     function testDepositForResetsWithdrawalTimer() public {
@@ -248,8 +300,7 @@ contract LiquidityPoolTest is Test {
         assertEq(secondDepositTime, block.timestamp);
     }
 
-    function testShareCalculationVulnerableToInflation() public {
-        // This tests the donation attack vulnerability
+    function testShareCalculationResistsDonation() public {
         uint256 initialDeposit = 1 ether;
 
         // First deposit
@@ -261,22 +312,17 @@ contract LiquidityPoolTest is Test {
 
         // Second deposit gets fewer shares due to inflated balance
         uint256 secondDeposit = 1 ether;
-        uint256 balanceBeforeSecondDeposit = address(pool).balance;
 
         vm.prank(user2);
         pool.deposit{value: secondDeposit}();
 
-        // user2 should get fewer shares than they should
+        // user2 should get shares based on internal accounting, not balance
         uint256 user2Shares = shareToken.balanceOf(user2);
-        // The totalSupply before second deposit is 1 ether (from first user)
-        // Balance before second deposit was 11 ether (1 original + 10 donated)
-        // So shares = (1 ether * 1 ether) / 12 ether = 1/12 ether
-        uint256 totalSupplyBefore = initialDeposit; // 1 ether
-        uint256 expectedShares = (secondDeposit * totalSupplyBefore)
-            / (balanceBeforeSecondDeposit + secondDeposit);
+        uint256 totalSupplyBefore = initialDeposit;
+        uint256 expectedShares = (secondDeposit * totalSupplyBefore) / initialDeposit;
 
         assertEq(user2Shares, expectedShares);
-        assertLt(user2Shares, secondDeposit); // Gets fewer shares due to donation attack
+        assertEq(user2Shares, secondDeposit);
     }
 
     function testRewardClaimingWithReentrancy() public {
@@ -297,12 +343,17 @@ contract LiquidityPoolTest is Test {
         vm.deal(address(pool), address(pool).balance + 1 ether);
 
         uint256 nonce = pool.nonces(signer);
-        bytes32 messageHash = keccak256(abi.encode(signer, rewardAmount, nonce));
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, messageHash);
+        bytes32 structHash = keccak256(
+            abi.encode(pool.CLAIM_TYPEHASH(), signer, signer, rewardAmount, nonce)
+        );
+        bytes32 digest = keccak256(
+            abi.encodePacked("\x19\x01", pool.domainSeparator(), structHash)
+        );
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, digest);
         bytes memory signature = abi.encodePacked(r, s, v);
 
         vm.prank(signer);
-        pool.claimReward(signer, rewardAmount, nonce, signature);
+        pool.claimReward(signer, signer, rewardAmount, nonce, signature);
 
         // Verify nonce was incremented only on success
         assertEq(pool.nonces(signer), nonce + 1);
