@@ -53,7 +53,7 @@ contract LiquidityPoolTest is Test {
 
         assertEq(shareToken.balanceOf(user1), depositAmount);
         assertEq(pool.rewards(user1), (depositAmount * pool.REWARD_RATE()) / 100);
-        assertEq(pool.lastDepositTime(user1), block.timestamp);
+        assertEq(pool.lastDepositTime(user1), 0);
         assertEq(address(pool).balance, depositAmount);
     }
 
@@ -225,27 +225,54 @@ contract LiquidityPoolTest is Test {
         pool.claimReward(user1, rewardAmount, nonce, signature);
     }
 
-    function testDepositForResetsWithdrawalTimer() public {
-        uint256 firstDeposit = 1 ether;
-        uint256 secondDeposit = 0.5 ether;
+    function testDepositForDoesNotResetVictimWithdrawalTimer() public {
+        uint256 victimDeposit = 1 ether;
 
-        // First deposit
         vm.prank(user1);
-        pool.deposit{value: firstDeposit}();
+        pool.deposit{value: victimDeposit}();
 
-        uint256 firstDepositTime = pool.lastDepositTime(user1);
-
-        // Wait some time
-        skip(12 hours);
-
-        // Second deposit for the same user (griefing attack vector)
+        skip(pool.WITHDRAWAL_DELAY());
         vm.prank(user2);
-        pool.depositFor{value: secondDeposit}(user1);
+        pool.depositFor{value: 1 wei}(user1);
 
-        uint256 secondDepositTime = pool.lastDepositTime(user1);
+        vm.startPrank(user1);
+        shareToken.approve(address(pool), victimDeposit);
+        pool.withdraw(victimDeposit);
+        vm.stopPrank();
+    }
 
-        assertGt(secondDepositTime, firstDepositTime);
-        assertEq(secondDepositTime, block.timestamp);
+    function testRepeatedDepositForDoesNotMoveTimer() public {
+        uint256 victimDeposit = 1 ether;
+
+        vm.prank(user1);
+        pool.deposit{value: victimDeposit}();
+        uint256 baseline = pool.lastDepositTime(user1);
+
+        skip(6 hours);
+        vm.prank(user2);
+        pool.depositFor{value: 1 wei}(user1);
+        skip(6 hours);
+        vm.prank(user2);
+        pool.depositFor{value: 1 wei}(user1);
+
+        assertEq(pool.lastDepositTime(user1), baseline);
+    }
+
+    function testWithdrawBlockedBeforeDelayEvenWithThirdPartyDeposit() public {
+        uint256 victimDeposit = 1 ether;
+
+        vm.prank(user1);
+        pool.deposit{value: victimDeposit}();
+
+        skip(12 hours);
+        vm.prank(user2);
+        pool.depositFor{value: 1 wei}(user1);
+
+        vm.startPrank(user1);
+        shareToken.approve(address(pool), victimDeposit);
+        vm.expectRevert("Withdrawal delay not met");
+        pool.withdraw(victimDeposit);
+        vm.stopPrank();
     }
 
     function testShareCalculationVulnerableToInflation() public {

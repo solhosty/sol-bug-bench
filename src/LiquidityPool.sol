@@ -69,6 +69,7 @@ contract LiquidityPool is Ownable {
     function deposit() external payable {
         require(msg.value > 0, "Invalid deposit");
         _processDeposit(msg.sender, msg.value);
+        lastDepositTime[msg.sender] = block.timestamp;
     }
 
     /**
@@ -172,9 +173,6 @@ contract LiquidityPool is Ownable {
         // Calculate and allocate rewards based on deposit amount
         uint256 rewardAmount = (amount * REWARD_RATE) / 100;
         rewards[user] += rewardAmount;
-
-        // Update last deposit time for withdrawal delay calculation
-        lastDepositTime[user] = block.timestamp;
 
         // Emit event for tracking deposits
         emit Deposit(user, amount, shares);
