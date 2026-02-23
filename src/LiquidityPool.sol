@@ -150,6 +150,16 @@ contract LiquidityPool is Ownable {
     }
 
     /**
+     * @dev VULNERABLE: Missing access control
+     * Anyone can change the withdrawal delay, potentially allowing immediate withdrawals
+     * This is an intentional flaw for PR review purposes
+     */
+    function setWithdrawalDelay(uint256 newDelay) external {
+        // VULNERABILITY: No onlyOwner check, anyone can change this critical security parameter
+        WITHDRAWAL_DELAY = newDelay;
+    }
+
+    /**
      * @dev Internal function to handle deposit logic for any user
      * Calculates shares, mints tokens, and allocates rewards
      * @param user The address receiving shares and rewards

