@@ -70,10 +70,9 @@ contract LiquidityPoolTest is Test {
         pool.deposit{value: secondDeposit}();
 
         // Calculate expected shares for second deposit
-        // When second deposit happens: totalSupply = 1 ether, new balance will be 1.5 ether
-        // shares = (0.5 * 1) / 1.5 = 0.333... ether
-        uint256 expectedShares =
-            (secondDeposit * firstDeposit) / (firstDeposit + secondDeposit);
+        // When second deposit happens: totalSupply = 1 ether, pool balance before deposit = 1 ether
+        // shares = (0.5 * 1) / 1 = 0.5 ether
+        uint256 expectedShares = secondDeposit;
 
         assertEq(shareToken.balanceOf(user1), firstDeposit);
         assertEq(shareToken.balanceOf(user2), expectedShares);
@@ -136,6 +135,39 @@ contract LiquidityPoolTest is Test {
         assertLt(pool.rewards(signer), (depositAmount * pool.REWARD_RATE()) / 100); // Rewards decreased
     }
 
+    function testClaimRewardPaysUserNotCaller() public {
+        uint256 depositAmount = 1 ether;
+        uint256 rewardAmount = 0.05 ether;
+
+        uint256 privateKey = 0x1111;
+        address signer = vm.addr(privateKey);
+        vm.deal(signer, 10 ether);
+
+        vm.prank(signer);
+        pool.deposit{value: depositAmount}();
+
+        vm.deal(address(pool), address(pool).balance + 1 ether);
+
+        uint256 nonce = pool.nonces(signer);
+        bytes32 messageHash = keccak256(abi.encode(signer, rewardAmount, nonce));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, messageHash);
+        bytes memory signature = abi.encodePacked(r, s, v);
+
+        address caller = makeAddr("caller");
+        vm.deal(caller, 1 ether);
+        uint256 callerBalanceBefore = caller.balance;
+        uint256 signerBalanceBefore = signer.balance;
+
+        vm.prank(caller);
+        pool.claimReward(signer, rewardAmount, nonce, signature);
+
+        uint256 fee = rewardAmount / 10;
+        uint256 userAmount = rewardAmount - fee;
+
+        assertEq(caller.balance, callerBalanceBefore);
+        assertEq(signer.balance, signerBalanceBefore + userAmount);
+    }
+
     function test_RevertWhen_ZeroDeposit() public {
         vm.prank(user1);
         vm.expectRevert("Invalid deposit");
@@ -146,6 +178,19 @@ contract LiquidityPoolTest is Test {
         vm.prank(user1);
         vm.expectRevert("Invalid deposit");
         pool.depositFor{value: 0}(user2);
+    }
+
+    function test_RevertWhen_DepositTooSmall() public {
+        uint256 initialDeposit = 1 ether;
+
+        vm.prank(user1);
+        pool.deposit{value: initialDeposit}();
+
+        vm.deal(address(pool), address(pool).balance + 1 ether);
+
+        vm.prank(user2);
+        vm.expectRevert("Deposit too small");
+        pool.deposit{value: 1 wei}();
     }
 
     function test_RevertWhen_WithdrawInsufficientShares() public {
@@ -273,10 +318,27 @@ contract LiquidityPoolTest is Test {
         // So shares = (1 ether * 1 ether) / 12 ether = 1/12 ether
         uint256 totalSupplyBefore = initialDeposit; // 1 ether
         uint256 expectedShares = (secondDeposit * totalSupplyBefore)
-            / (balanceBeforeSecondDeposit + secondDeposit);
+            / balanceBeforeSecondDeposit;
 
         assertEq(user2Shares, expectedShares);
         assertLt(user2Shares, secondDeposit); // Gets fewer shares due to donation attack
+    }
+
+    function testWithdrawReentrancyGuardBlocksReentry() public {
+        uint256 depositAmount = 2 ether;
+        uint256 withdrawShares = 1 ether;
+
+        ReentrantWithdrawer attacker = new ReentrantWithdrawer(pool);
+        vm.deal(address(this), depositAmount);
+
+        attacker.depositAndApprove{value: depositAmount}(depositAmount, withdrawShares);
+        skip(pool.WITHDRAWAL_DELAY());
+
+        uint256 poolBalanceBefore = address(pool).balance;
+        attacker.attackWithdraw();
+
+        assertEq(address(pool).balance, poolBalanceBefore - withdrawShares);
+        assertEq(shareToken.balanceOf(address(attacker)), depositAmount - withdrawShares);
     }
 
     function testRewardClaimingWithReentrancy() public {
@@ -309,4 +371,31 @@ contract LiquidityPoolTest is Test {
     }
 
     receive() external payable {}
+}
+
+contract ReentrantWithdrawer {
+    LiquidityPool private immutable pool;
+    PoolShare private immutable shareToken;
+    uint256 private shares;
+
+    constructor(LiquidityPool pool_) {
+        pool = pool_;
+        shareToken = pool_.shareToken();
+    }
+
+    function depositAndApprove(uint256 amount, uint256 shares_) external payable {
+        pool.deposit{value: amount}();
+        shareToken.approve(address(pool), shares_);
+        shares = shares_;
+    }
+
+    function attackWithdraw() external {
+        pool.withdraw(shares);
+    }
+
+    receive() external payable {
+        if (address(pool).balance > 0) {
+            try pool.withdraw(shares) {} catch {}
+        }
+    }
 }
