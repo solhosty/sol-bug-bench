@@ -125,12 +125,13 @@ contract LiquidityPoolTest is Test {
         vm.deal(address(pool), address(pool).balance + 1 ether);
 
         uint256 nonce = pool.nonces(signer);
-        bytes32 messageHash = keccak256(abi.encode(signer, rewardAmount, nonce));
+        uint256 expiry = block.timestamp + 1 hours;
+        bytes32 messageHash = keccak256(abi.encode(signer, rewardAmount, nonce, expiry));
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, messageHash);
         bytes memory signature = abi.encodePacked(r, s, v);
 
         vm.prank(signer);
-        pool.claimReward(signer, rewardAmount, nonce, signature);
+        pool.claimReward(signer, rewardAmount, nonce, expiry, signature);
 
         assertEq(pool.nonces(signer), nonce + 1);
         assertLt(pool.rewards(signer), (depositAmount * pool.REWARD_RATE()) / 100); // Rewards decreased
@@ -182,13 +183,14 @@ contract LiquidityPoolTest is Test {
         pool.deposit{value: depositAmount}();
 
         uint256 nonce = pool.nonces(user1);
-        bytes32 messageHash = keccak256(abi.encode(user1, excessiveReward, nonce));
+        uint256 expiry = block.timestamp + 1 hours;
+        bytes32 messageHash = keccak256(abi.encode(user1, excessiveReward, nonce, expiry));
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(1, messageHash);
         bytes memory signature = abi.encodePacked(r, s, v);
 
         vm.prank(user1);
         vm.expectRevert("Insufficient rewards");
-        pool.claimReward(user1, excessiveReward, nonce, signature);
+        pool.claimReward(user1, excessiveReward, nonce, expiry, signature);
     }
 
     function test_RevertWhen_ClaimRewardInvalidNonce() public {
@@ -199,13 +201,14 @@ contract LiquidityPoolTest is Test {
         pool.deposit{value: depositAmount}();
 
         uint256 wrongNonce = pool.nonces(user1) + 1;
-        bytes32 messageHash = keccak256(abi.encode(user1, rewardAmount, wrongNonce));
+        uint256 expiry = block.timestamp + 1 hours;
+        bytes32 messageHash = keccak256(abi.encode(user1, rewardAmount, wrongNonce, expiry));
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(1, messageHash);
         bytes memory signature = abi.encodePacked(r, s, v);
 
         vm.prank(user1);
         vm.expectRevert("Invalid nonce");
-        pool.claimReward(user1, rewardAmount, wrongNonce, signature);
+        pool.claimReward(user1, rewardAmount, wrongNonce, expiry, signature);
     }
 
     function test_RevertWhen_ClaimRewardInvalidSignature() public {
@@ -216,13 +219,14 @@ contract LiquidityPoolTest is Test {
         pool.deposit{value: depositAmount}();
 
         uint256 nonce = pool.nonces(user1);
-        bytes32 messageHash = keccak256(abi.encode(user1, rewardAmount, nonce));
+        uint256 expiry = block.timestamp + 1 hours;
+        bytes32 messageHash = keccak256(abi.encode(user1, rewardAmount, nonce, expiry));
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(2, messageHash); // Wrong private key
         bytes memory signature = abi.encodePacked(r, s, v);
 
         vm.prank(user1);
         vm.expectRevert("Invalid signature");
-        pool.claimReward(user1, rewardAmount, nonce, signature);
+        pool.claimReward(user1, rewardAmount, nonce, expiry, signature);
     }
 
     function testDepositForResetsWithdrawalTimer() public {
@@ -297,15 +301,71 @@ contract LiquidityPoolTest is Test {
         vm.deal(address(pool), address(pool).balance + 1 ether);
 
         uint256 nonce = pool.nonces(signer);
-        bytes32 messageHash = keccak256(abi.encode(signer, rewardAmount, nonce));
+        uint256 expiry = block.timestamp + 1 hours;
+        bytes32 messageHash = keccak256(abi.encode(signer, rewardAmount, nonce, expiry));
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, messageHash);
         bytes memory signature = abi.encodePacked(r, s, v);
 
         vm.prank(signer);
-        pool.claimReward(signer, rewardAmount, nonce, signature);
+        pool.claimReward(signer, rewardAmount, nonce, expiry, signature);
 
         // Verify nonce was incremented only on success
         assertEq(pool.nonces(signer), nonce + 1);
+    }
+
+    function test_RevertWhen_ClaimRewardExpiredSignature() public {
+        uint256 depositAmount = 1 ether;
+        uint256 rewardAmount = 0.05 ether;
+
+        uint256 privateKey = 0x2222;
+        address signer = vm.addr(privateKey);
+        vm.deal(signer, 10 ether);
+
+        vm.prank(signer);
+        pool.deposit{value: depositAmount}();
+
+        vm.deal(address(pool), address(pool).balance + 1 ether);
+
+        uint256 nonce = pool.nonces(signer);
+        uint256 expiry = block.timestamp - 1;
+        bytes32 messageHash = keccak256(abi.encode(signer, rewardAmount, nonce, expiry));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, messageHash);
+        bytes memory signature = abi.encodePacked(r, s, v);
+
+        vm.prank(signer);
+        vm.expectRevert("Signature expired");
+        pool.claimReward(signer, rewardAmount, nonce, expiry, signature);
+    }
+
+    function testCancelNonceInvalidatesSignatures() public {
+        uint256 depositAmount = 1 ether;
+        uint256 rewardAmount = 0.05 ether;
+
+        uint256 privateKey = 0x3333;
+        address signer = vm.addr(privateKey);
+        vm.deal(signer, 10 ether);
+
+        vm.prank(signer);
+        pool.deposit{value: depositAmount}();
+
+        vm.deal(address(pool), address(pool).balance + 1 ether);
+
+        uint256 nonce = pool.nonces(signer);
+        uint256 newNonce = nonce + 1;
+
+        vm.prank(signer);
+        pool.cancelNonce(newNonce);
+
+        assertEq(pool.nonces(signer), newNonce);
+
+        uint256 expiry = block.timestamp + 1 hours;
+        bytes32 messageHash = keccak256(abi.encode(signer, rewardAmount, nonce, expiry));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, messageHash);
+        bytes memory signature = abi.encodePacked(r, s, v);
+
+        vm.prank(signer);
+        vm.expectRevert("Invalid nonce");
+        pool.claimReward(signer, rewardAmount, nonce, expiry, signature);
     }
 
     receive() external payable {}

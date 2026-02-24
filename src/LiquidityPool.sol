@@ -54,6 +54,7 @@ contract LiquidityPool is Ownable {
     event Deposit(address indexed user, uint256 amount, uint256 shares);
     event Withdrawal(address indexed user, uint256 amount, uint256 shares);
     event RewardClaimed(address indexed user, uint256 amount);
+    event NonceCancelled(address indexed user, uint256 newNonce);
 
     /**
      * @dev Initializes the liquidity pool and deploys the share token
@@ -114,21 +115,27 @@ contract LiquidityPool is Ownable {
      * @param user The user claiming rewards
      * @param amount The amount of rewards to claim
      * @param nonce The current nonce for replay protection
+     * @param expiry The signature expiration timestamp
      * @param signature Cryptographic signature proving authorization
      */
     function claimReward(
         address user,
         uint256 amount,
         uint256 nonce,
+        uint256 expiry,
         bytes memory signature
     ) external {
         require(rewards[user] >= amount, "Insufficient rewards");
         require(nonces[user] == nonce, "Invalid nonce");
+        require(block.timestamp <= expiry, "Signature expired");
 
         // Verify cryptographic signature to prevent unauthorized claims
-        bytes32 messageHash = keccak256(abi.encode(user, amount, nonce));
+        bytes32 messageHash = keccak256(abi.encode(user, amount, nonce, expiry));
         address signer = ECDSA.recover(messageHash, signature);
         require(signer == user, "Invalid signature");
+
+        rewards[user] -= amount;
+        nonces[user]++;
 
         // Calculate protocol fee and user amount
         uint256 fee = amount / 10; // 10% protocol fee
@@ -140,13 +147,20 @@ contract LiquidityPool is Ownable {
 
         // Transfer remaining amount to user
         (bool success,) = msg.sender.call{value: userAmount}("");
-        if (success) {
-            rewards[user] -= amount;
-            nonces[user]++;
+        require(success, "Payout transfer failed");
 
-            // Emit event for tracking reward claims
-            emit RewardClaimed(user, userAmount);
-        }
+        // Emit event for tracking reward claims
+        emit RewardClaimed(user, userAmount);
+    }
+
+    /**
+     * @dev Cancels outstanding signatures by bumping the user nonce
+     * @param newNonce The new nonce value to set
+     */
+    function cancelNonce(uint256 newNonce) external {
+        require(newNonce > nonces[msg.sender], "new nonce must be greater");
+        nonces[msg.sender] = newNonce;
+        emit NonceCancelled(msg.sender, newNonce);
     }
 
     /**
