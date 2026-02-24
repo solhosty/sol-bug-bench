@@ -3,8 +3,12 @@ pragma solidity ^0.8.0;
 
 import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Burnable.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/interfaces/IERC1271.sol";
+import "@openzeppelin/contracts/utils/Address.sol";
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import "./StableCoin.sol";
+
+contract LiquidityPool;
 
 /**
  * @title PoolShare
@@ -14,7 +18,11 @@ import "./StableCoin.sol";
  * The supply directly correlates to the total liquidity provided to the protocol.
  */
 contract PoolShare is ERC20Burnable, Ownable {
-    constructor() ERC20("Liquidity Pool Share", "LPS") Ownable(msg.sender) {}
+    LiquidityPool public immutable pool;
+
+    constructor(address poolAddress) ERC20("Liquidity Pool Share", "LPS") Ownable(msg.sender) {
+        pool = LiquidityPool(poolAddress);
+    }
 
     /**
      * @dev Mints new pool share tokens
@@ -24,6 +32,15 @@ contract PoolShare is ERC20Burnable, Ownable {
      */
     function mint(address to, uint256 amount) external onlyOwner {
         _mint(to, amount);
+    }
+
+    function _beforeTokenTransfer(address from, address to, uint256) internal override {
+        if (from != address(0) && to != address(0)) {
+            require(
+                block.timestamp >= pool.lastDepositTime(from) + pool.WITHDRAWAL_DELAY(),
+                "Withdrawal delay not met"
+            );
+        }
     }
 }
 
@@ -59,7 +76,7 @@ contract LiquidityPool is Ownable {
      * @dev Initializes the liquidity pool and deploys the share token
      */
     constructor() Ownable(msg.sender) {
-        shareToken = new PoolShare();
+        shareToken = new PoolShare(address(this));
     }
 
     /**
@@ -69,6 +86,7 @@ contract LiquidityPool is Ownable {
     function deposit() external payable {
         require(msg.value > 0, "Invalid deposit");
         _processDeposit(msg.sender, msg.value);
+        lastDepositTime[msg.sender] = block.timestamp;
     }
 
     /**
@@ -114,39 +132,62 @@ contract LiquidityPool is Ownable {
      * @param user The user claiming rewards
      * @param amount The amount of rewards to claim
      * @param nonce The current nonce for replay protection
+     * @param expiry The timestamp after which the signature is invalid
      * @param signature Cryptographic signature proving authorization
      */
     function claimReward(
         address user,
         uint256 amount,
         uint256 nonce,
+        uint256 expiry,
         bytes memory signature
     ) external {
         require(rewards[user] >= amount, "Insufficient rewards");
         require(nonces[user] == nonce, "Invalid nonce");
+        require(block.timestamp <= expiry, "Signature expired");
 
         // Verify cryptographic signature to prevent unauthorized claims
-        bytes32 messageHash = keccak256(abi.encode(user, amount, nonce));
-        address signer = ECDSA.recover(messageHash, signature);
-        require(signer == user, "Invalid signature");
+        bytes32 messageHash = keccak256(
+            abi.encodePacked(address(this), block.chainid, user, amount, nonce, expiry)
+        );
+        bytes32 ethHash = ECDSA.toEthSignedMessageHash(messageHash);
+        if (Address.isContract(user)) {
+            require(
+                IERC1271(user).isValidSignature(ethHash, signature)
+                    == IERC1271.isValidSignature.selector,
+                "Invalid contract signature"
+            );
+        } else {
+            require(ECDSA.recover(ethHash, signature) == user, "Invalid signature");
+        }
 
         // Calculate protocol fee and user amount
-        uint256 fee = amount / 10; // 10% protocol fee
+        uint256 fee = (amount + 9) / 10; // 10% protocol fee, rounded up
         uint256 userAmount = amount - fee;
+        require(userAmount + fee == amount, "Fee math error");
+
+        rewards[user] -= amount;
+        nonces[user] += 1;
 
         // Transfer protocol fee to treasury
         (bool feeSuccess,) = owner().call{value: fee}("");
         require(feeSuccess, "Fee transfer failed");
 
         // Transfer remaining amount to user
-        (bool success,) = msg.sender.call{value: userAmount}("");
-        if (success) {
-            rewards[user] -= amount;
-            nonces[user]++;
+        (bool success,) = payable(user).call{value: userAmount}("");
+        require(success, "User transfer failed");
 
-            // Emit event for tracking reward claims
-            emit RewardClaimed(user, userAmount);
-        }
+        // Emit event for tracking reward claims
+        emit RewardClaimed(user, userAmount);
+    }
+
+    /**
+     * @dev Allows users to invalidate signed rewards by advancing their nonce
+     * @param newNonce The new nonce value, must be greater than current
+     */
+    function cancelNonce(uint256 newNonce) external {
+        require(newNonce > nonces[msg.sender], "new nonce must be greater");
+        nonces[msg.sender] = newNonce;
     }
 
     /**
@@ -158,12 +199,16 @@ contract LiquidityPool is Ownable {
     function _processDeposit(address user, uint256 amount) internal {
         // Calculate shares based on current pool ratio
         uint256 shares;
-        if (shareToken.totalSupply() == 0) {
+        uint256 totalSupply = shareToken.totalSupply();
+        if (totalSupply == 0) {
             // First deposit gets 1:1 share ratio
             shares = amount;
         } else {
             // Subsequent deposits get proportional shares
-            shares = (amount * shareToken.totalSupply()) / address(this).balance;
+            uint256 preBalance = address(this).balance - amount;
+            require(preBalance > 0, "No pool balance");
+            shares = (amount * totalSupply) / preBalance;
+            require(shares > 0, "Deposit too small");
         }
 
         // Mint shares to the user
@@ -172,9 +217,6 @@ contract LiquidityPool is Ownable {
         // Calculate and allocate rewards based on deposit amount
         uint256 rewardAmount = (amount * REWARD_RATE) / 100;
         rewards[user] += rewardAmount;
-
-        // Update last deposit time for withdrawal delay calculation
-        lastDepositTime[user] = block.timestamp;
 
         // Emit event for tracking deposits
         emit Deposit(user, amount, shares);

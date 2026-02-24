@@ -2,7 +2,31 @@
 pragma solidity ^0.8.0;
 
 import "forge-std/Test.sol";
+import "@openzeppelin/contracts/interfaces/IERC1271.sol";
+import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import "../src/LiquidityPool.sol";
+
+contract TestEIP1271Wallet is IERC1271 {
+    address public signer;
+
+    constructor(address signer_) {
+        signer = signer_;
+    }
+
+    function isValidSignature(bytes32 hash, bytes memory signature)
+        external
+        view
+        override
+        returns (bytes4)
+    {
+        address recovered = ECDSA.recover(hash, signature);
+        if (recovered == signer) {
+            return IERC1271.isValidSignature.selector;
+        }
+
+        return 0xffffffff;
+    }
+}
 
 contract LiquidityPoolTest is Test {
     LiquidityPool public pool;
@@ -53,7 +77,7 @@ contract LiquidityPoolTest is Test {
 
         assertEq(shareToken.balanceOf(user1), depositAmount);
         assertEq(pool.rewards(user1), (depositAmount * pool.REWARD_RATE()) / 100);
-        assertEq(pool.lastDepositTime(user1), block.timestamp);
+        assertEq(pool.lastDepositTime(user1), 0);
         assertEq(address(pool).balance, depositAmount);
     }
 
@@ -70,14 +94,44 @@ contract LiquidityPoolTest is Test {
         pool.deposit{value: secondDeposit}();
 
         // Calculate expected shares for second deposit
-        // When second deposit happens: totalSupply = 1 ether, new balance will be 1.5 ether
-        // shares = (0.5 * 1) / 1.5 = 0.333... ether
-        uint256 expectedShares =
-            (secondDeposit * firstDeposit) / (firstDeposit + secondDeposit);
+        // When second deposit happens: totalSupply = 1 ether, preBalance = 1 ether
+        // shares = (0.5 * 1) / 1 = 0.5 ether
+        uint256 expectedShares = secondDeposit;
 
         assertEq(shareToken.balanceOf(user1), firstDeposit);
         assertEq(shareToken.balanceOf(user2), expectedShares);
         assertEq(address(pool).balance, firstDeposit + secondDeposit);
+    }
+
+    function test_RevertWhen_DepositTooSmall() public {
+        uint256 firstDeposit = 1 ether;
+
+        vm.prank(user1);
+        pool.deposit{value: firstDeposit}();
+
+        vm.deal(address(pool), address(pool).balance + 1 ether);
+
+        vm.prank(user2);
+        vm.expectRevert("Deposit too small");
+        pool.deposit{value: 1}();
+    }
+
+    function testShareTransferRespectsWithdrawalDelay() public {
+        uint256 depositAmount = 1 ether;
+
+        vm.prank(user1);
+        pool.deposit{value: depositAmount}();
+
+        vm.prank(user1);
+        vm.expectRevert("Withdrawal delay not met");
+        shareToken.transfer(user2, depositAmount);
+
+        skip(pool.WITHDRAWAL_DELAY());
+
+        vm.prank(user1);
+        shareToken.transfer(user2, depositAmount);
+
+        assertEq(shareToken.balanceOf(user2), depositAmount);
     }
 
     function testWithdraw() public {
@@ -125,15 +179,148 @@ contract LiquidityPoolTest is Test {
         vm.deal(address(pool), address(pool).balance + 1 ether);
 
         uint256 nonce = pool.nonces(signer);
-        bytes32 messageHash = keccak256(abi.encode(signer, rewardAmount, nonce));
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, messageHash);
+        uint256 expiry = block.timestamp + 1 days;
+        bytes32 messageHash = keccak256(
+            abi.encodePacked(address(pool), block.chainid, signer, rewardAmount, nonce, expiry)
+        );
+        bytes32 ethHash = ECDSA.toEthSignedMessageHash(messageHash);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, ethHash);
         bytes memory signature = abi.encodePacked(r, s, v);
 
-        vm.prank(signer);
-        pool.claimReward(signer, rewardAmount, nonce, signature);
+        uint256 signerBalanceBefore = signer.balance;
+        uint256 ownerBalanceBefore = owner.balance;
+        uint256 fee = (rewardAmount + 9) / 10;
+        uint256 userAmount = rewardAmount - fee;
+
+        vm.prank(user2);
+        pool.claimReward(signer, rewardAmount, nonce, expiry, signature);
 
         assertEq(pool.nonces(signer), nonce + 1);
         assertLt(pool.rewards(signer), (depositAmount * pool.REWARD_RATE()) / 100); // Rewards decreased
+        assertEq(signer.balance, signerBalanceBefore + userAmount);
+        assertEq(owner.balance, ownerBalanceBefore + fee);
+    }
+
+    function testClaimRewardEIP1271() public {
+        uint256 depositAmount = 1 ether;
+        uint256 rewardAmount = 0.05 ether;
+        uint256 privateKey = 0x2222;
+        address signer = vm.addr(privateKey);
+        TestEIP1271Wallet wallet = new TestEIP1271Wallet(signer);
+
+        vm.deal(address(wallet), 10 ether);
+
+        vm.prank(address(wallet));
+        pool.deposit{value: depositAmount}();
+
+        vm.deal(address(pool), address(pool).balance + 1 ether);
+
+        uint256 nonce = pool.nonces(address(wallet));
+        uint256 expiry = block.timestamp + 1 days;
+        bytes32 messageHash = keccak256(
+            abi.encodePacked(
+                address(pool),
+                block.chainid,
+                address(wallet),
+                rewardAmount,
+                nonce,
+                expiry
+            )
+        );
+        bytes32 ethHash = ECDSA.toEthSignedMessageHash(messageHash);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, ethHash);
+        bytes memory signature = abi.encodePacked(r, s, v);
+
+        uint256 walletBalanceBefore = address(wallet).balance;
+
+        pool.claimReward(address(wallet), rewardAmount, nonce, expiry, signature);
+
+        uint256 fee = (rewardAmount + 9) / 10;
+        uint256 userAmount = rewardAmount - fee;
+        assertEq(address(wallet).balance, walletBalanceBefore + userAmount);
+        assertEq(pool.nonces(address(wallet)), nonce + 1);
+    }
+
+    function testClaimRewardExpiredSignature() public {
+        uint256 depositAmount = 1 ether;
+        uint256 rewardAmount = 0.05 ether;
+        uint256 privateKey = 0x3333;
+        address signer = vm.addr(privateKey);
+        vm.deal(signer, 10 ether);
+
+        vm.prank(signer);
+        pool.deposit{value: depositAmount}();
+
+        uint256 nonce = pool.nonces(signer);
+        uint256 expiry = block.timestamp - 1;
+        bytes32 messageHash = keccak256(
+            abi.encodePacked(address(pool), block.chainid, signer, rewardAmount, nonce, expiry)
+        );
+        bytes32 ethHash = ECDSA.toEthSignedMessageHash(messageHash);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, ethHash);
+        bytes memory signature = abi.encodePacked(r, s, v);
+
+        vm.prank(signer);
+        vm.expectRevert("Signature expired");
+        pool.claimReward(signer, rewardAmount, nonce, expiry, signature);
+    }
+
+    function testCancelNonceInvalidatesSignature() public {
+        uint256 depositAmount = 1 ether;
+        uint256 rewardAmount = 0.05 ether;
+        uint256 privateKey = 0x4444;
+        address signer = vm.addr(privateKey);
+        vm.deal(signer, 10 ether);
+
+        vm.prank(signer);
+        pool.deposit{value: depositAmount}();
+
+        uint256 nonce = pool.nonces(signer);
+        uint256 expiry = block.timestamp + 1 days;
+        bytes32 messageHash = keccak256(
+            abi.encodePacked(address(pool), block.chainid, signer, rewardAmount, nonce, expiry)
+        );
+        bytes32 ethHash = ECDSA.toEthSignedMessageHash(messageHash);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, ethHash);
+        bytes memory signature = abi.encodePacked(r, s, v);
+
+        vm.prank(signer);
+        pool.cancelNonce(nonce + 1);
+
+        vm.prank(signer);
+        vm.expectRevert("Invalid nonce");
+        pool.claimReward(signer, rewardAmount, nonce, expiry, signature);
+    }
+
+    function testClaimRewardFeeRoundsUp() public {
+        uint256 depositAmount = 10;
+        uint256 rewardAmount = 1;
+        uint256 privateKey = 0x5555;
+        address signer = vm.addr(privateKey);
+        vm.deal(signer, 10 ether);
+
+        vm.prank(signer);
+        pool.deposit{value: depositAmount}();
+
+        vm.deal(address(pool), address(pool).balance + 1 ether);
+
+        uint256 nonce = pool.nonces(signer);
+        uint256 expiry = block.timestamp + 1 days;
+        bytes32 messageHash = keccak256(
+            abi.encodePacked(address(pool), block.chainid, signer, rewardAmount, nonce, expiry)
+        );
+        bytes32 ethHash = ECDSA.toEthSignedMessageHash(messageHash);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, ethHash);
+        bytes memory signature = abi.encodePacked(r, s, v);
+
+        uint256 signerBalanceBefore = signer.balance;
+        uint256 ownerBalanceBefore = owner.balance;
+
+        vm.prank(signer);
+        pool.claimReward(signer, rewardAmount, nonce, expiry, signature);
+
+        assertEq(signer.balance, signerBalanceBefore);
+        assertEq(owner.balance, ownerBalanceBefore + 1);
     }
 
     function test_RevertWhen_ZeroDeposit() public {
@@ -182,13 +369,17 @@ contract LiquidityPoolTest is Test {
         pool.deposit{value: depositAmount}();
 
         uint256 nonce = pool.nonces(user1);
-        bytes32 messageHash = keccak256(abi.encode(user1, excessiveReward, nonce));
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(1, messageHash);
+        uint256 expiry = block.timestamp + 1 days;
+        bytes32 messageHash = keccak256(
+            abi.encodePacked(address(pool), block.chainid, user1, excessiveReward, nonce, expiry)
+        );
+        bytes32 ethHash = ECDSA.toEthSignedMessageHash(messageHash);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(1, ethHash);
         bytes memory signature = abi.encodePacked(r, s, v);
 
         vm.prank(user1);
         vm.expectRevert("Insufficient rewards");
-        pool.claimReward(user1, excessiveReward, nonce, signature);
+        pool.claimReward(user1, excessiveReward, nonce, expiry, signature);
     }
 
     function test_RevertWhen_ClaimRewardInvalidNonce() public {
@@ -199,13 +390,17 @@ contract LiquidityPoolTest is Test {
         pool.deposit{value: depositAmount}();
 
         uint256 wrongNonce = pool.nonces(user1) + 1;
-        bytes32 messageHash = keccak256(abi.encode(user1, rewardAmount, wrongNonce));
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(1, messageHash);
+        uint256 expiry = block.timestamp + 1 days;
+        bytes32 messageHash = keccak256(
+            abi.encodePacked(address(pool), block.chainid, user1, rewardAmount, wrongNonce, expiry)
+        );
+        bytes32 ethHash = ECDSA.toEthSignedMessageHash(messageHash);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(1, ethHash);
         bytes memory signature = abi.encodePacked(r, s, v);
 
         vm.prank(user1);
         vm.expectRevert("Invalid nonce");
-        pool.claimReward(user1, rewardAmount, wrongNonce, signature);
+        pool.claimReward(user1, rewardAmount, wrongNonce, expiry, signature);
     }
 
     function test_RevertWhen_ClaimRewardInvalidSignature() public {
@@ -216,16 +411,20 @@ contract LiquidityPoolTest is Test {
         pool.deposit{value: depositAmount}();
 
         uint256 nonce = pool.nonces(user1);
-        bytes32 messageHash = keccak256(abi.encode(user1, rewardAmount, nonce));
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(2, messageHash); // Wrong private key
+        uint256 expiry = block.timestamp + 1 days;
+        bytes32 messageHash = keccak256(
+            abi.encodePacked(address(pool), block.chainid, user1, rewardAmount, nonce, expiry)
+        );
+        bytes32 ethHash = ECDSA.toEthSignedMessageHash(messageHash);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(2, ethHash); // Wrong private key
         bytes memory signature = abi.encodePacked(r, s, v);
 
         vm.prank(user1);
         vm.expectRevert("Invalid signature");
-        pool.claimReward(user1, rewardAmount, nonce, signature);
+        pool.claimReward(user1, rewardAmount, nonce, expiry, signature);
     }
 
-    function testDepositForResetsWithdrawalTimer() public {
+    function testDepositForDoesNotResetWithdrawalTimer() public {
         uint256 firstDeposit = 1 ether;
         uint256 secondDeposit = 0.5 ether;
 
@@ -244,8 +443,7 @@ contract LiquidityPoolTest is Test {
 
         uint256 secondDepositTime = pool.lastDepositTime(user1);
 
-        assertGt(secondDepositTime, firstDepositTime);
-        assertEq(secondDepositTime, block.timestamp);
+        assertEq(secondDepositTime, firstDepositTime);
     }
 
     function testShareCalculationVulnerableToInflation() public {
@@ -270,10 +468,10 @@ contract LiquidityPoolTest is Test {
         uint256 user2Shares = shareToken.balanceOf(user2);
         // The totalSupply before second deposit is 1 ether (from first user)
         // Balance before second deposit was 11 ether (1 original + 10 donated)
-        // So shares = (1 ether * 1 ether) / 12 ether = 1/12 ether
+        // So shares = (1 ether * 1 ether) / 11 ether = 1/11 ether
         uint256 totalSupplyBefore = initialDeposit; // 1 ether
         uint256 expectedShares = (secondDeposit * totalSupplyBefore)
-            / (balanceBeforeSecondDeposit + secondDeposit);
+            / balanceBeforeSecondDeposit;
 
         assertEq(user2Shares, expectedShares);
         assertLt(user2Shares, secondDeposit); // Gets fewer shares due to donation attack
@@ -297,12 +495,16 @@ contract LiquidityPoolTest is Test {
         vm.deal(address(pool), address(pool).balance + 1 ether);
 
         uint256 nonce = pool.nonces(signer);
-        bytes32 messageHash = keccak256(abi.encode(signer, rewardAmount, nonce));
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, messageHash);
+        uint256 expiry = block.timestamp + 1 days;
+        bytes32 messageHash = keccak256(
+            abi.encodePacked(address(pool), block.chainid, signer, rewardAmount, nonce, expiry)
+        );
+        bytes32 ethHash = ECDSA.toEthSignedMessageHash(messageHash);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, ethHash);
         bytes memory signature = abi.encodePacked(r, s, v);
 
         vm.prank(signer);
-        pool.claimReward(signer, rewardAmount, nonce, signature);
+        pool.claimReward(signer, rewardAmount, nonce, expiry, signature);
 
         // Verify nonce was incremented only on success
         assertEq(pool.nonces(signer), nonce + 1);
