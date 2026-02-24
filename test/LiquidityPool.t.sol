@@ -4,12 +4,55 @@ pragma solidity ^0.8.0;
 import "forge-std/Test.sol";
 import "../src/LiquidityPool.sol";
 
+contract ReentrantWithdrawer {
+    LiquidityPool public pool;
+    PoolShare public shareToken;
+    bool public reentryAttempted;
+    bool public reentryFailed;
+
+    constructor(LiquidityPool pool_) {
+        pool = pool_;
+        shareToken = pool_.shareToken();
+    }
+
+    function deposit() external payable {
+        pool.deposit{value: msg.value}();
+    }
+
+    function approve(uint256 shares) external {
+        shareToken.approve(address(pool), shares);
+    }
+
+    function startWithdraw(uint256 shares) external {
+        pool.withdraw(shares);
+    }
+
+    receive() external payable {
+        if (!reentryAttempted) {
+            reentryAttempted = true;
+            try pool.withdraw(1) {
+            } catch {
+                reentryFailed = true;
+            }
+        }
+    }
+}
+
 contract LiquidityPoolTest is Test {
     LiquidityPool public pool;
     PoolShare public shareToken;
     address public owner;
     address public user1;
     address public user2;
+
+    bool private rewardReentryAttempted;
+    bool private rewardReentryFailed;
+    bool private triggerRewardReentrancy;
+    LiquidityPool private rewardReentryPool;
+    address private rewardReentryUser;
+    uint256 private rewardReentryAmount;
+    uint256 private rewardReentryNonce;
+    bytes private rewardReentrySignature;
 
     function setUp() public {
         owner = address(this);
@@ -70,10 +113,9 @@ contract LiquidityPoolTest is Test {
         pool.deposit{value: secondDeposit}();
 
         // Calculate expected shares for second deposit
-        // When second deposit happens: totalSupply = 1 ether, new balance will be 1.5 ether
-        // shares = (0.5 * 1) / 1.5 = 0.333... ether
-        uint256 expectedShares =
-            (secondDeposit * firstDeposit) / (firstDeposit + secondDeposit);
+        // When second deposit happens: totalSupply = 1 ether, balance before deposit is 1 ether
+        // shares = (0.5 * 1) / 1 = 0.5 ether
+        uint256 expectedShares = (secondDeposit * firstDeposit) / firstDeposit;
 
         assertEq(shareToken.balanceOf(user1), firstDeposit);
         assertEq(shareToken.balanceOf(user2), expectedShares);
@@ -108,6 +150,21 @@ contract LiquidityPoolTest is Test {
         assertEq(shareToken.balanceOf(user1), depositAmount - withdrawShares);
     }
 
+    function testWithdrawBlocksReentrancy() public {
+        uint256 depositAmount = 1 ether;
+        ReentrantWithdrawer attacker = new ReentrantWithdrawer(pool);
+
+        attacker.deposit{value: depositAmount}();
+        attacker.approve(depositAmount);
+        skip(pool.WITHDRAWAL_DELAY());
+
+        attacker.startWithdraw(depositAmount);
+
+        assertEq(shareToken.balanceOf(address(attacker)), 0);
+        assertEq(attacker.reentryAttempted(), true);
+        assertEq(attacker.reentryFailed(), true);
+    }
+
     function testClaimReward() public {
         uint256 depositAmount = 1 ether;
         uint256 rewardAmount = 0.05 ether;
@@ -134,6 +191,40 @@ contract LiquidityPoolTest is Test {
 
         assertEq(pool.nonces(signer), nonce + 1);
         assertLt(pool.rewards(signer), (depositAmount * pool.REWARD_RATE()) / 100); // Rewards decreased
+    }
+
+    function testClaimRewardBlocksReentrancyFromFeeTransfer() public {
+        uint256 depositAmount = 1 ether;
+        uint256 rewardAmount = 0.05 ether;
+
+        uint256 privateKey = 0x2468;
+        address signer = vm.addr(privateKey);
+        vm.deal(signer, 10 ether);
+
+        vm.prank(signer);
+        pool.deposit{value: depositAmount}();
+
+        vm.deal(address(pool), address(pool).balance + 1 ether);
+
+        uint256 nonce = pool.nonces(signer);
+        bytes32 messageHash = keccak256(abi.encode(signer, rewardAmount, nonce));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, messageHash);
+        bytes memory signature = abi.encodePacked(r, s, v);
+
+        rewardReentryAttempted = false;
+        rewardReentryFailed = false;
+        triggerRewardReentrancy = true;
+        rewardReentryPool = pool;
+        rewardReentryUser = signer;
+        rewardReentryAmount = rewardAmount;
+        rewardReentryNonce = nonce;
+        rewardReentrySignature = signature;
+
+        vm.prank(signer);
+        pool.claimReward(signer, rewardAmount, nonce, signature);
+
+        assertEq(rewardReentryAttempted, true);
+        assertEq(rewardReentryFailed, true);
     }
 
     function test_RevertWhen_ZeroDeposit() public {
@@ -270,13 +361,25 @@ contract LiquidityPoolTest is Test {
         uint256 user2Shares = shareToken.balanceOf(user2);
         // The totalSupply before second deposit is 1 ether (from first user)
         // Balance before second deposit was 11 ether (1 original + 10 donated)
-        // So shares = (1 ether * 1 ether) / 12 ether = 1/12 ether
+        // So shares = (1 ether * 1 ether) / 11 ether = 1/11 ether
         uint256 totalSupplyBefore = initialDeposit; // 1 ether
-        uint256 expectedShares = (secondDeposit * totalSupplyBefore)
-            / (balanceBeforeSecondDeposit + secondDeposit);
+        uint256 expectedShares = (secondDeposit * totalSupplyBefore) / balanceBeforeSecondDeposit;
 
         assertEq(user2Shares, expectedShares);
         assertLt(user2Shares, secondDeposit); // Gets fewer shares due to donation attack
+    }
+
+    function test_RevertWhen_DepositTooSmall() public {
+        uint256 initialDeposit = 1 ether;
+
+        vm.prank(user1);
+        pool.deposit{value: initialDeposit}();
+
+        vm.deal(address(pool), address(pool).balance + 10 ether);
+
+        vm.prank(user2);
+        vm.expectRevert("Deposit too small");
+        pool.deposit{value: 1 wei}();
     }
 
     function testRewardClaimingWithReentrancy() public {
@@ -308,5 +411,19 @@ contract LiquidityPoolTest is Test {
         assertEq(pool.nonces(signer), nonce + 1);
     }
 
-    receive() external payable {}
+    receive() external payable {
+        if (triggerRewardReentrancy) {
+            triggerRewardReentrancy = false;
+            rewardReentryAttempted = true;
+            try rewardReentryPool.claimReward(
+                rewardReentryUser,
+                rewardReentryAmount,
+                rewardReentryNonce,
+                rewardReentrySignature
+            ) {
+            } catch {
+                rewardReentryFailed = true;
+            }
+        }
+    }
 }
