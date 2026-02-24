@@ -174,6 +174,29 @@ contract LiquidityPoolTest is Test {
         vm.stopPrank();
     }
 
+    function test_RevertWhen_WithdrawZeroShares() public {
+        vm.prank(user1);
+        vm.expectRevert("Invalid share amount");
+        pool.withdraw(0);
+    }
+
+    function test_RevertWhen_WithdrawWithZeroTotalSupply() public {
+        uint256 depositAmount = 1 ether;
+
+        vm.startPrank(user1);
+        pool.deposit{value: depositAmount}();
+        shareToken.approve(address(pool), depositAmount);
+        skip(pool.WITHDRAWAL_DELAY());
+
+        // Withdraw all shares to make totalSupply zero
+        pool.withdraw(depositAmount);
+
+        // Now try to withdraw again with no shares in pool
+        vm.expectRevert("No shares in pool");
+        pool.withdraw(1);
+        vm.stopPrank();
+    }
+
     function test_RevertWhen_ClaimRewardInsufficientRewards() public {
         uint256 depositAmount = 1 ether;
         uint256 excessiveReward = 1 ether; // More than available

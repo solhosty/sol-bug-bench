@@ -87,6 +87,7 @@ contract LiquidityPool is Ownable {
      * @param shares The number of pool shares to burn for withdrawal
      */
     function withdraw(uint256 shares) external {
+        require(shares > 0, "Invalid share amount");
         require(shareToken.balanceOf(msg.sender) >= shares, "Insufficient shares");
 
         // Enforce withdrawal delay for security
@@ -95,8 +96,12 @@ contract LiquidityPool is Ownable {
             "Withdrawal delay not met"
         );
 
+        // Ensure there is supply backing the pool before dividing
+        uint256 totalSupply = shareToken.totalSupply();
+        require(totalSupply > 0, "No shares in pool");
+
         // Calculate ETH amount based on proportional share of pool
-        uint256 amount = shares * address(this).balance / shareToken.totalSupply();
+        uint256 amount = shares * address(this).balance / totalSupply;
 
         // Transfer ETH to user
         (bool success,) = msg.sender.call{value: amount}("");
