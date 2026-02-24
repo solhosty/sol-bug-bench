@@ -4,6 +4,43 @@ pragma solidity ^0.8.0;
 import "forge-std/Test.sol";
 import "../src/LiquidityPool.sol";
 
+contract ReentrantClaimer {
+    LiquidityPool public pool;
+    address public user;
+    uint256 public amount;
+    uint256 public nonce;
+    bytes public signature;
+    bool private reentered;
+
+    /// @dev Stores the pool address for reentrancy attempts.
+    constructor(LiquidityPool poolAddress) {
+        pool = poolAddress;
+    }
+
+    /// @dev Configure a claim that will be reused in reentrancy attempts.
+    function setClaim(address user_, uint256 amount_, uint256 nonce_, bytes calldata signature_)
+        external
+    {
+        user = user_;
+        amount = amount_;
+        nonce = nonce_;
+        signature = signature_;
+    }
+
+    /// @dev Initiates the claim to trigger the reentrant callback.
+    function claim() external {
+        pool.claimReward(user, amount, nonce, signature);
+    }
+
+    receive() external payable {
+        if (reentered) {
+            return;
+        }
+        reentered = true;
+        pool.claimReward(user, amount, nonce, signature);
+    }
+}
+
 contract LiquidityPoolTest is Test {
     LiquidityPool public pool;
     PoolShare public shareToken;
@@ -306,6 +343,36 @@ contract LiquidityPoolTest is Test {
 
         // Verify nonce was incremented only on success
         assertEq(pool.nonces(signer), nonce + 1);
+    }
+
+    function testClaimRewardReentrancyBlocked() public {
+        uint256 depositAmount = 1 ether;
+        uint256 rewardAmount = 0.05 ether;
+
+        uint256 privateKey = 0x9abc;
+        address signer = vm.addr(privateKey);
+        vm.deal(signer, 10 ether);
+
+        vm.prank(signer);
+        pool.deposit{value: depositAmount}();
+
+        vm.deal(address(pool), address(pool).balance + 1 ether);
+
+        uint256 nonce = pool.nonces(signer);
+        bytes32 messageHash = keccak256(abi.encode(signer, rewardAmount, nonce));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, messageHash);
+        bytes memory signature = abi.encodePacked(r, s, v);
+
+        ReentrantClaimer attacker = new ReentrantClaimer(pool);
+        attacker.setClaim(signer, rewardAmount, nonce, signature);
+
+        uint256 rewardsBefore = pool.rewards(signer);
+
+        vm.expectRevert("ReentrancyGuard: reentrant call");
+        attacker.claim();
+
+        assertEq(pool.nonces(signer), nonce);
+        assertEq(pool.rewards(signer), rewardsBefore);
     }
 
     receive() external payable {}
