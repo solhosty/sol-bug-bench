@@ -1,31 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Burnable.sol";
-import "@openzeppelin/contracts/access/Ownable.sol";
-import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
-import "./StableCoin.sol";
-
-/**
- * @title PoolShare
- * @dev ERC20 token representing ownership shares in the liquidity pool
- *
- * These tokens are minted when users deposit ETH and burned when they withdraw.
- * The supply directly correlates to the total liquidity provided to the protocol.
- */
-contract PoolShare is ERC20Burnable, Ownable {
-    constructor() ERC20("Liquidity Pool Share", "LPS") Ownable(msg.sender) {}
-
-    /**
-     * @dev Mints new pool share tokens
-     * Only callable by the pool contract to maintain proper accounting
-     * @param to The address to receive the minted tokens
-     * @param amount The amount of tokens to mint
-     */
-    function mint(address to, uint256 amount) external onlyOwner {
-        _mint(to, amount);
-    }
-}
+import "./PoolShare.sol";
+import "./Ownable.sol";
+import "./ECDSA.sol";
 
 /**
  * @title LiquidityPool
@@ -59,7 +37,7 @@ contract LiquidityPool is Ownable {
      * @dev Initializes the liquidity pool and deploys the share token
      */
     constructor() Ownable(msg.sender) {
-        shareToken = new PoolShare();
+        shareToken = new PoolShare(address(this));
     }
 
     /**
