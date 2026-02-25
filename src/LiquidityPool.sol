@@ -156,18 +156,23 @@ contract LiquidityPool is Ownable {
      * @param amount The ETH amount being deposited
      */
     function _processDeposit(address user, uint256 amount) internal {
-        // Calculate shares based on current pool ratio
-        uint256 shares;
-        if (shareToken.totalSupply() == 0) {
-            // First deposit gets 1:1 share ratio
-            shares = amount;
-        } else {
-            // Subsequent deposits get proportional shares
-            shares = (amount * shareToken.totalSupply()) / address(this).balance;
-        }
+    uint256 shares;
 
-        // Mint shares to the user
-        shareToken.mint(user, shares);
+    if (shareToken.totalSupply() == 0) {
+        // First deposit gets 1:1 share ratio
+        shares = amount;                             // ← MUST set this
+    } else {
+        // Subsequent deposits get proportional shares
+        shares = (amount * shareToken.totalSupply()) / address(this).balance;
+    }
+
+    // ← This line actually fixes the HIGH-severity bug
+    require(shares > 0, "Deposit too small - would mint zero shares");
+
+    // Now it's safe to mint
+    shareToken.mint(user, shares);
+    // ... rest of function (transfer, events, etc.)
+}
 
         // Calculate and allocate rewards based on deposit amount
         uint256 rewardAmount = (amount * REWARD_RATE) / 100;
