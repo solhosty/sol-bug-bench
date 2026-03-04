@@ -2,8 +2,12 @@
 pragma solidity ^0.8.0;
 
 import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Burnable.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 import "./StableCoin.sol";
 
 /**
@@ -35,7 +39,9 @@ contract PoolShare is ERC20Burnable, Ownable {
  * The pool implements a time-delay mechanism for withdrawals to ensure stability
  * and prevent flash loan attacks.
  */
-contract LiquidityPool is Ownable {
+contract LiquidityPool is Ownable, ReentrancyGuard, EIP712 {
+    using SafeERC20 for IERC20;
+
     PoolShare public immutable shareToken;
 
     // User reward balances tracked separately for efficiency
@@ -50,6 +56,9 @@ contract LiquidityPool is Ownable {
     // Reward rate as percentage of deposit (10%)
     uint256 public constant REWARD_RATE = 10;
 
+    bytes32 public constant CLAIM_TYPEHASH =
+        keccak256("ClaimReward(address user,uint256 amount,uint256 nonce)");
+
     // Event declarations for comprehensive tracking
     event Deposit(address indexed user, uint256 amount, uint256 shares);
     event Withdrawal(address indexed user, uint256 amount, uint256 shares);
@@ -58,7 +67,7 @@ contract LiquidityPool is Ownable {
     /**
      * @dev Initializes the liquidity pool and deploys the share token
      */
-    constructor() Ownable(msg.sender) {
+    constructor() Ownable(msg.sender) EIP712("LiquidityPool", "1") {
         shareToken = new PoolShare();
     }
 
@@ -86,7 +95,7 @@ contract LiquidityPool is Ownable {
      * Enforces withdrawal delay for security against flash loan attacks
      * @param shares The number of pool shares to burn for withdrawal
      */
-    function withdraw(uint256 shares) external {
+    function withdraw(uint256 shares) external nonReentrant {
         require(shareToken.balanceOf(msg.sender) >= shares, "Insufficient shares");
 
         // Enforce withdrawal delay for security
@@ -98,13 +107,13 @@ contract LiquidityPool is Ownable {
         // Calculate ETH amount based on proportional share of pool
         uint256 amount = shares * address(this).balance / shareToken.totalSupply();
 
+        // Burn the shares to maintain proper accounting
+        IERC20(address(shareToken)).safeTransferFrom(msg.sender, address(this), shares);
+        shareToken.burn(shares);
+
         // Transfer ETH to user
         (bool success,) = msg.sender.call{value: amount}("");
         require(success, "Transfer failed");
-
-        // Burn the shares to maintain proper accounting
-        shareToken.transferFrom(msg.sender, address(this), shares);
-        shareToken.burn(shares);
         emit Withdrawal(msg.sender, amount, shares);
     }
 
@@ -121,12 +130,13 @@ contract LiquidityPool is Ownable {
         uint256 amount,
         uint256 nonce,
         bytes memory signature
-    ) external {
+    ) external nonReentrant {
         require(rewards[user] >= amount, "Insufficient rewards");
         require(nonces[user] == nonce, "Invalid nonce");
 
         // Verify cryptographic signature to prevent unauthorized claims
-        bytes32 messageHash = keccak256(abi.encode(user, amount, nonce));
+        bytes32 structHash = keccak256(abi.encode(CLAIM_TYPEHASH, user, amount, nonce));
+        bytes32 messageHash = _hashTypedDataV4(structHash);
         address signer = ECDSA.recover(messageHash, signature);
         require(signer == user, "Invalid signature");
 
@@ -134,19 +144,19 @@ contract LiquidityPool is Ownable {
         uint256 fee = amount / 10; // 10% protocol fee
         uint256 userAmount = amount - fee;
 
+        rewards[user] -= amount;
+        nonces[user]++;
+
         // Transfer protocol fee to treasury
         (bool feeSuccess,) = owner().call{value: fee}("");
         require(feeSuccess, "Fee transfer failed");
 
         // Transfer remaining amount to user
-        (bool success,) = msg.sender.call{value: userAmount}("");
-        if (success) {
-            rewards[user] -= amount;
-            nonces[user]++;
+        (bool success,) = user.call{value: userAmount}("");
+        require(success, "Reward transfer failed");
 
-            // Emit event for tracking reward claims
-            emit RewardClaimed(user, userAmount);
-        }
+        // Emit event for tracking reward claims
+        emit RewardClaimed(user, userAmount);
     }
 
     /**

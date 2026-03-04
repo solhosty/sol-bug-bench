@@ -11,6 +11,31 @@ contract LiquidityPoolTest is Test {
     address public user1;
     address public user2;
 
+    function _domainSeparator() internal view returns (bytes32) {
+        return keccak256(
+            abi.encode(
+                keccak256(
+                    "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
+                ),
+                keccak256(bytes("LiquidityPool")),
+                keccak256(bytes("1")),
+                block.chainid,
+                address(pool)
+            )
+        );
+    }
+
+    function _claimDigest(address user, uint256 amount, uint256 nonce)
+        internal
+        view
+        returns (bytes32)
+    {
+        bytes32 structHash = keccak256(
+            abi.encode(pool.CLAIM_TYPEHASH(), user, amount, nonce)
+        );
+        return keccak256(abi.encodePacked("\x19\x01", _domainSeparator(), structHash));
+    }
+
     function setUp() public {
         owner = address(this);
         user1 = makeAddr("user1");
@@ -125,8 +150,8 @@ contract LiquidityPoolTest is Test {
         vm.deal(address(pool), address(pool).balance + 1 ether);
 
         uint256 nonce = pool.nonces(signer);
-        bytes32 messageHash = keccak256(abi.encode(signer, rewardAmount, nonce));
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, messageHash);
+        bytes32 digest = _claimDigest(signer, rewardAmount, nonce);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, digest);
         bytes memory signature = abi.encodePacked(r, s, v);
 
         vm.prank(signer);
@@ -182,8 +207,8 @@ contract LiquidityPoolTest is Test {
         pool.deposit{value: depositAmount}();
 
         uint256 nonce = pool.nonces(user1);
-        bytes32 messageHash = keccak256(abi.encode(user1, excessiveReward, nonce));
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(1, messageHash);
+        bytes32 digest = _claimDigest(user1, excessiveReward, nonce);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(1, digest);
         bytes memory signature = abi.encodePacked(r, s, v);
 
         vm.prank(user1);
@@ -199,8 +224,8 @@ contract LiquidityPoolTest is Test {
         pool.deposit{value: depositAmount}();
 
         uint256 wrongNonce = pool.nonces(user1) + 1;
-        bytes32 messageHash = keccak256(abi.encode(user1, rewardAmount, wrongNonce));
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(1, messageHash);
+        bytes32 digest = _claimDigest(user1, rewardAmount, wrongNonce);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(1, digest);
         bytes memory signature = abi.encodePacked(r, s, v);
 
         vm.prank(user1);
@@ -216,8 +241,8 @@ contract LiquidityPoolTest is Test {
         pool.deposit{value: depositAmount}();
 
         uint256 nonce = pool.nonces(user1);
-        bytes32 messageHash = keccak256(abi.encode(user1, rewardAmount, nonce));
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(2, messageHash); // Wrong private key
+        bytes32 digest = _claimDigest(user1, rewardAmount, nonce);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(2, digest); // Wrong private key
         bytes memory signature = abi.encodePacked(r, s, v);
 
         vm.prank(user1);
@@ -297,8 +322,8 @@ contract LiquidityPoolTest is Test {
         vm.deal(address(pool), address(pool).balance + 1 ether);
 
         uint256 nonce = pool.nonces(signer);
-        bytes32 messageHash = keccak256(abi.encode(signer, rewardAmount, nonce));
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, messageHash);
+        bytes32 digest = _claimDigest(signer, rewardAmount, nonce);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, digest);
         bytes memory signature = abi.encodePacked(r, s, v);
 
         vm.prank(signer);
@@ -306,6 +331,37 @@ contract LiquidityPoolTest is Test {
 
         // Verify nonce was incremented only on success
         assertEq(pool.nonces(signer), nonce + 1);
+    }
+
+    function testClaimRewardPaysSignedUser() public {
+        uint256 depositAmount = 1 ether;
+        uint256 rewardAmount = 0.05 ether;
+
+        uint256 privateKey = 0x1234;
+        address signer = vm.addr(privateKey);
+        vm.deal(signer, 10 ether);
+
+        vm.prank(signer);
+        pool.deposit{value: depositAmount}();
+
+        vm.deal(address(pool), address(pool).balance + 1 ether);
+
+        uint256 nonce = pool.nonces(signer);
+        bytes32 digest = _claimDigest(signer, rewardAmount, nonce);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, digest);
+        bytes memory signature = abi.encodePacked(r, s, v);
+
+        uint256 signerBalanceBefore = signer.balance;
+        uint256 callerBalanceBefore = user2.balance;
+
+        vm.prank(user2);
+        pool.claimReward(signer, rewardAmount, nonce, signature);
+
+        uint256 fee = rewardAmount / 10;
+        uint256 userAmount = rewardAmount - fee;
+
+        assertEq(signer.balance, signerBalanceBefore + userAmount);
+        assertEq(user2.balance, callerBalanceBefore);
     }
 
     receive() external payable {}
