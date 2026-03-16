@@ -69,11 +69,9 @@ contract LiquidityPoolTest is Test {
         vm.prank(user2);
         pool.deposit{value: secondDeposit}();
 
-        // Calculate expected shares for second deposit
-        // When second deposit happens: totalSupply = 1 ether, new balance will be 1.5 ether
-        // shares = (0.5 * 1) / 1.5 = 0.333... ether
-        uint256 expectedShares =
-            (secondDeposit * firstDeposit) / (firstDeposit + secondDeposit);
+        // Share pricing uses pre-deposit accounting, so user2 gets proportional shares
+        // based on the pool state before their deposit
+        uint256 expectedShares = secondDeposit;
 
         assertEq(shareToken.balanceOf(user1), firstDeposit);
         assertEq(shareToken.balanceOf(user2), expectedShares);
@@ -248,35 +246,28 @@ contract LiquidityPoolTest is Test {
         assertEq(secondDepositTime, block.timestamp);
     }
 
-    function testShareCalculationVulnerableToInflation() public {
-        // This tests the donation attack vulnerability
+    function testShareCalculationResistsInflationDonation() public {
+        // Donation should not impact share pricing because accounting is internal
         uint256 initialDeposit = 1 ether;
 
         // First deposit
         vm.prank(user1);
         pool.deposit{value: initialDeposit}();
 
-        // Attacker sends ETH directly to inflate the pool balance
+        // Attacker sends ETH directly to inflate the contract ETH balance
         vm.deal(address(pool), address(pool).balance + 10 ether);
 
-        // Second deposit gets fewer shares due to inflated balance
+        // Second deposit should still get fair shares
         uint256 secondDeposit = 1 ether;
-        uint256 balanceBeforeSecondDeposit = address(pool).balance;
 
         vm.prank(user2);
         pool.deposit{value: secondDeposit}();
 
-        // user2 should get fewer shares than they should
         uint256 user2Shares = shareToken.balanceOf(user2);
-        // The totalSupply before second deposit is 1 ether (from first user)
-        // Balance before second deposit was 11 ether (1 original + 10 donated)
-        // So shares = (1 ether * 1 ether) / 12 ether = 1/12 ether
-        uint256 totalSupplyBefore = initialDeposit; // 1 ether
-        uint256 expectedShares = (secondDeposit * totalSupplyBefore)
-            / (balanceBeforeSecondDeposit + secondDeposit);
+        uint256 expectedShares = secondDeposit;
 
         assertEq(user2Shares, expectedShares);
-        assertLt(user2Shares, secondDeposit); // Gets fewer shares due to donation attack
+        assertEq(pool.totalDeposits(), initialDeposit + secondDeposit);
     }
 
     function testRewardClaimingWithReentrancy() public {

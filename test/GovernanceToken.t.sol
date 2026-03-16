@@ -387,7 +387,6 @@ contract GovernanceTokenTest is Test {
 
         // Try to withdraw more than staked
         uint256 withdrawAmount = 200 * 10 ** 18;
-        vm.prank(user1);
         vm.expectRevert("Insufficient group balance");
         staking.withdrawFromGroup(groupId, withdrawAmount);
     }

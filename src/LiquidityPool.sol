@@ -4,6 +4,7 @@ pragma solidity ^0.8.0;
 import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Burnable.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "./StableCoin.sol";
 
 /**
@@ -35,7 +36,7 @@ contract PoolShare is ERC20Burnable, Ownable {
  * The pool implements a time-delay mechanism for withdrawals to ensure stability
  * and prevent flash loan attacks.
  */
-contract LiquidityPool is Ownable {
+contract LiquidityPool is Ownable, ReentrancyGuard {
     PoolShare public immutable shareToken;
 
     // User reward balances tracked separately for efficiency
@@ -44,6 +45,8 @@ contract LiquidityPool is Ownable {
     mapping(address => uint256) public nonces;
     // Timestamp tracking for withdrawal delay enforcement
     mapping(address => uint256) public lastDepositTime;
+    // Tracks deposits used for share pricing and withdrawals
+    uint256 public totalDeposits;
 
     // Security delay for withdrawals (24 hours)
     uint256 public constant WITHDRAWAL_DELAY = 1 days;
@@ -78,6 +81,7 @@ contract LiquidityPool is Ownable {
      */
     function depositFor(address user) external payable {
         require(msg.value > 0, "Invalid deposit");
+        require(user != address(0), "Invalid user address");
         _processDeposit(user, msg.value);
     }
 
@@ -86,7 +90,7 @@ contract LiquidityPool is Ownable {
      * Enforces withdrawal delay for security against flash loan attacks
      * @param shares The number of pool shares to burn for withdrawal
      */
-    function withdraw(uint256 shares) external {
+    function withdraw(uint256 shares) external nonReentrant {
         require(shareToken.balanceOf(msg.sender) >= shares, "Insufficient shares");
 
         // Enforce withdrawal delay for security
@@ -96,15 +100,16 @@ contract LiquidityPool is Ownable {
         );
 
         // Calculate ETH amount based on proportional share of pool
-        uint256 amount = shares * address(this).balance / shareToken.totalSupply();
-
-        // Transfer ETH to user
-        (bool success,) = msg.sender.call{value: amount}("");
-        require(success, "Transfer failed");
+        uint256 amount = shares * totalDeposits / shareToken.totalSupply();
 
         // Burn the shares to maintain proper accounting
         shareToken.transferFrom(msg.sender, address(this), shares);
         shareToken.burn(shares);
+        totalDeposits -= amount;
+
+        // Transfer ETH to user
+        (bool success,) = msg.sender.call{value: amount}("");
+        require(success, "Transfer failed");
         emit Withdrawal(msg.sender, amount, shares);
     }
 
@@ -121,7 +126,7 @@ contract LiquidityPool is Ownable {
         uint256 amount,
         uint256 nonce,
         bytes memory signature
-    ) external {
+    ) external nonReentrant {
         require(rewards[user] >= amount, "Insufficient rewards");
         require(nonces[user] == nonce, "Invalid nonce");
 
@@ -129,10 +134,14 @@ contract LiquidityPool is Ownable {
         bytes32 messageHash = keccak256(abi.encode(user, amount, nonce));
         address signer = ECDSA.recover(messageHash, signature);
         require(signer == user, "Invalid signature");
+        require(msg.sender == user, "Claim initiator must be user");
 
         // Calculate protocol fee and user amount
         uint256 fee = amount / 10; // 10% protocol fee
         uint256 userAmount = amount - fee;
+
+        rewards[user] -= amount;
+        nonces[user]++;
 
         // Transfer protocol fee to treasury
         (bool feeSuccess,) = owner().call{value: fee}("");
@@ -140,13 +149,10 @@ contract LiquidityPool is Ownable {
 
         // Transfer remaining amount to user
         (bool success,) = msg.sender.call{value: userAmount}("");
-        if (success) {
-            rewards[user] -= amount;
-            nonces[user]++;
+        require(success, "Reward transfer failed");
 
-            // Emit event for tracking reward claims
-            emit RewardClaimed(user, userAmount);
-        }
+        // Emit event for tracking reward claims
+        emit RewardClaimed(user, userAmount);
     }
 
     /**
@@ -158,16 +164,20 @@ contract LiquidityPool is Ownable {
     function _processDeposit(address user, uint256 amount) internal {
         // Calculate shares based on current pool ratio
         uint256 shares;
-        if (shareToken.totalSupply() == 0) {
+        uint256 totalSupply = shareToken.totalSupply();
+        if (totalSupply == 0) {
             // First deposit gets 1:1 share ratio
             shares = amount;
         } else {
             // Subsequent deposits get proportional shares
-            shares = (amount * shareToken.totalSupply()) / address(this).balance;
+            uint256 previousBalance = totalDeposits;
+            require(previousBalance > 0, "Invalid pool balance");
+            shares = (amount * totalSupply) / previousBalance;
         }
 
         // Mint shares to the user
         shareToken.mint(user, shares);
+        totalDeposits += amount;
 
         // Calculate and allocate rewards based on deposit amount
         uint256 rewardAmount = (amount * REWARD_RATE) / 100;
@@ -178,5 +188,9 @@ contract LiquidityPool is Ownable {
 
         // Emit event for tracking deposits
         emit Deposit(user, amount, shares);
+    }
+
+    receive() external payable {
+        revert("Direct deposits not allowed");
     }
 }
