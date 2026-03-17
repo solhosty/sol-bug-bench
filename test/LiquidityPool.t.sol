@@ -192,7 +192,7 @@ contract LiquidityPoolTest is Test {
         pool.withdraw(depositAmount);
 
         // Now try to withdraw again with no shares in pool
-        vm.expectRevert("No shares in pool");
+        vm.expectRevert("Insufficient shares");
         pool.withdraw(1);
         vm.stopPrank();
     }
