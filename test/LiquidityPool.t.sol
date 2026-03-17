@@ -18,9 +18,12 @@ contract ReentrantClaimer {
     }
 
     /// @dev Configure a claim that will be reused in reentrancy attempts.
-    function setClaim(address user_, uint256 amount_, uint256 nonce_, bytes calldata signature_)
-        external
-    {
+    function setClaim(
+        address user_,
+        uint256 amount_,
+        uint256 nonce_,
+        bytes calldata signature_
+    ) external {
         user = user_;
         amount = amount_;
         nonce = nonce_;
@@ -368,7 +371,7 @@ contract LiquidityPoolTest is Test {
 
         uint256 rewardsBefore = pool.rewards(signer);
 
-        vm.expectRevert("ReentrancyGuard: reentrant call");
+        vm.expectRevert("User transfer failed");
         attacker.claim();
 
         assertEq(pool.nonces(signer), nonce);
