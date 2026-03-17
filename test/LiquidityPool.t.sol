@@ -30,9 +30,8 @@ contract WithdrawReentrantAttacker {
     receive() external payable {
         if (attacking && !attemptedReentry) {
             attemptedReentry = true;
-            (bool success,) = address(pool).call(
-                abi.encodeWithSelector(pool.withdraw.selector, 1)
-            );
+            (bool success,) =
+                address(pool).call(abi.encodeWithSelector(pool.withdraw.selector, 1));
             reentrySucceeded = success;
         }
     }
@@ -390,11 +389,17 @@ contract LiquidityPoolTest is Test {
     }
 
     receive() external payable {
-        if (msg.sender == address(pool) && reenterOnFeeTransfer && !claimReentryAttempted) {
+        if (
+            msg.sender == address(pool) && reenterOnFeeTransfer
+                && !claimReentryAttempted
+        ) {
             claimReentryAttempted = true;
-            (bool success,) = address(pool).call(
-                abi.encodeWithSelector(pool.withdraw.selector, feeTransferReenterShares)
-            );
+            (bool success,) = address(pool)
+                .call(
+                    abi.encodeWithSelector(
+                        pool.withdraw.selector, feeTransferReenterShares
+                    )
+                );
             claimReentrySucceeded = success;
         }
     }
