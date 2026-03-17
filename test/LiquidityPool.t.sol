@@ -184,7 +184,8 @@ contract LiquidityPoolTest is Test {
 
         uint256 nonce = pool.nonces(user1);
         uint256 expiry = block.timestamp + 1 hours;
-        bytes32 messageHash = keccak256(abi.encode(user1, excessiveReward, nonce, expiry));
+        bytes32 messageHash =
+            keccak256(abi.encode(user1, excessiveReward, nonce, expiry));
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(1, messageHash);
         bytes memory signature = abi.encodePacked(r, s, v);
 
@@ -202,7 +203,8 @@ contract LiquidityPoolTest is Test {
 
         uint256 wrongNonce = pool.nonces(user1) + 1;
         uint256 expiry = block.timestamp + 1 hours;
-        bytes32 messageHash = keccak256(abi.encode(user1, rewardAmount, wrongNonce, expiry));
+        bytes32 messageHash =
+            keccak256(abi.encode(user1, rewardAmount, wrongNonce, expiry));
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(1, messageHash);
         bytes memory signature = abi.encodePacked(r, s, v);
 
