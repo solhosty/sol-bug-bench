@@ -3,6 +3,7 @@ pragma solidity ^0.8.0;
 
 import "forge-std/Test.sol";
 import "../src/StableCoin.sol";
+import "../src/TokenStreamer.sol";
 
 contract StableCoinTest is Test {
     StableCoin public stablecoin;

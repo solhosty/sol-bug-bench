@@ -18,8 +18,12 @@ contract TokenStreamer {
         uint256 amount,
         uint256 duration
     );
-    event StreamWithdrawal(uint256 indexed streamId, address indexed recipient, uint256 amount);
-    event StreamDeposit(uint256 indexed streamId, address indexed sender, uint256 amount);
+    event StreamWithdrawal(
+        uint256 indexed streamId, address indexed recipient, uint256 amount
+    );
+    event StreamDeposit(
+        uint256 indexed streamId, address indexed sender, uint256 amount
+    );
 
     uint256 public constant MIN_DURATION = 1 hours;
     uint256 public constant MAX_DURATION = 365 days;

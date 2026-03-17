@@ -2,7 +2,11 @@
 pragma solidity ^0.8.0;
 
 library ECDSA {
-    function recover(bytes32 hash, bytes memory signature) internal pure returns (address) {
+    function recover(bytes32 hash, bytes memory signature)
+        internal
+        pure
+        returns (address)
+    {
         if (signature.length != 65) {
             return address(0);
         }

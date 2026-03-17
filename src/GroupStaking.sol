@@ -90,7 +90,11 @@ contract GroupStaking {
         return (group.id, group.totalAmount, group.members, group.weights);
     }
 
-    function isMemberOfGroup(uint256 groupId, address user) external view returns (bool) {
+    function isMemberOfGroup(uint256 groupId, address user)
+        external
+        view
+        returns (bool)
+    {
         Group storage group = groups[groupId];
         if (group.id == 0) {
             return false;
