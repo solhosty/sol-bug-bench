@@ -4,6 +4,7 @@ pragma solidity ^0.8.0;
 import "forge-std/Test.sol";
 import "@openzeppelin/contracts/interfaces/IERC1271.sol";
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 import "../src/LiquidityPool.sol";
 
 contract TestEIP1271Wallet is IERC1271 {
@@ -26,6 +27,8 @@ contract TestEIP1271Wallet is IERC1271 {
 
         return 0xffffffff;
     }
+
+    receive() external payable {}
 }
 
 contract LiquidityPoolTest is Test {
@@ -181,9 +184,11 @@ contract LiquidityPoolTest is Test {
         uint256 nonce = pool.nonces(signer);
         uint256 expiry = block.timestamp + 1 days;
         bytes32 messageHash = keccak256(
-            abi.encodePacked(address(pool), block.chainid, signer, rewardAmount, nonce, expiry)
+            abi.encodePacked(
+                address(pool), block.chainid, signer, rewardAmount, nonce, expiry
+            )
         );
-        bytes32 ethHash = ECDSA.toEthSignedMessageHash(messageHash);
+        bytes32 ethHash = MessageHashUtils.toEthSignedMessageHash(messageHash);
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, ethHash);
         bytes memory signature = abi.encodePacked(r, s, v);
 
@@ -227,7 +232,7 @@ contract LiquidityPoolTest is Test {
                 expiry
             )
         );
-        bytes32 ethHash = ECDSA.toEthSignedMessageHash(messageHash);
+        bytes32 ethHash = MessageHashUtils.toEthSignedMessageHash(messageHash);
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, ethHash);
         bytes memory signature = abi.encodePacked(r, s, v);
 
@@ -254,9 +259,11 @@ contract LiquidityPoolTest is Test {
         uint256 nonce = pool.nonces(signer);
         uint256 expiry = block.timestamp - 1;
         bytes32 messageHash = keccak256(
-            abi.encodePacked(address(pool), block.chainid, signer, rewardAmount, nonce, expiry)
+            abi.encodePacked(
+                address(pool), block.chainid, signer, rewardAmount, nonce, expiry
+            )
         );
-        bytes32 ethHash = ECDSA.toEthSignedMessageHash(messageHash);
+        bytes32 ethHash = MessageHashUtils.toEthSignedMessageHash(messageHash);
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, ethHash);
         bytes memory signature = abi.encodePacked(r, s, v);
 
@@ -278,9 +285,11 @@ contract LiquidityPoolTest is Test {
         uint256 nonce = pool.nonces(signer);
         uint256 expiry = block.timestamp + 1 days;
         bytes32 messageHash = keccak256(
-            abi.encodePacked(address(pool), block.chainid, signer, rewardAmount, nonce, expiry)
+            abi.encodePacked(
+                address(pool), block.chainid, signer, rewardAmount, nonce, expiry
+            )
         );
-        bytes32 ethHash = ECDSA.toEthSignedMessageHash(messageHash);
+        bytes32 ethHash = MessageHashUtils.toEthSignedMessageHash(messageHash);
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, ethHash);
         bytes memory signature = abi.encodePacked(r, s, v);
 
@@ -307,9 +316,11 @@ contract LiquidityPoolTest is Test {
         uint256 nonce = pool.nonces(signer);
         uint256 expiry = block.timestamp + 1 days;
         bytes32 messageHash = keccak256(
-            abi.encodePacked(address(pool), block.chainid, signer, rewardAmount, nonce, expiry)
+            abi.encodePacked(
+                address(pool), block.chainid, signer, rewardAmount, nonce, expiry
+            )
         );
-        bytes32 ethHash = ECDSA.toEthSignedMessageHash(messageHash);
+        bytes32 ethHash = MessageHashUtils.toEthSignedMessageHash(messageHash);
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, ethHash);
         bytes memory signature = abi.encodePacked(r, s, v);
 
@@ -371,9 +382,11 @@ contract LiquidityPoolTest is Test {
         uint256 nonce = pool.nonces(user1);
         uint256 expiry = block.timestamp + 1 days;
         bytes32 messageHash = keccak256(
-            abi.encodePacked(address(pool), block.chainid, user1, excessiveReward, nonce, expiry)
+            abi.encodePacked(
+                address(pool), block.chainid, user1, excessiveReward, nonce, expiry
+            )
         );
-        bytes32 ethHash = ECDSA.toEthSignedMessageHash(messageHash);
+        bytes32 ethHash = MessageHashUtils.toEthSignedMessageHash(messageHash);
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(1, ethHash);
         bytes memory signature = abi.encodePacked(r, s, v);
 
@@ -392,9 +405,11 @@ contract LiquidityPoolTest is Test {
         uint256 wrongNonce = pool.nonces(user1) + 1;
         uint256 expiry = block.timestamp + 1 days;
         bytes32 messageHash = keccak256(
-            abi.encodePacked(address(pool), block.chainid, user1, rewardAmount, wrongNonce, expiry)
+            abi.encodePacked(
+                address(pool), block.chainid, user1, rewardAmount, wrongNonce, expiry
+            )
         );
-        bytes32 ethHash = ECDSA.toEthSignedMessageHash(messageHash);
+        bytes32 ethHash = MessageHashUtils.toEthSignedMessageHash(messageHash);
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(1, ethHash);
         bytes memory signature = abi.encodePacked(r, s, v);
 
@@ -413,9 +428,11 @@ contract LiquidityPoolTest is Test {
         uint256 nonce = pool.nonces(user1);
         uint256 expiry = block.timestamp + 1 days;
         bytes32 messageHash = keccak256(
-            abi.encodePacked(address(pool), block.chainid, user1, rewardAmount, nonce, expiry)
+            abi.encodePacked(
+                address(pool), block.chainid, user1, rewardAmount, nonce, expiry
+            )
         );
-        bytes32 ethHash = ECDSA.toEthSignedMessageHash(messageHash);
+        bytes32 ethHash = MessageHashUtils.toEthSignedMessageHash(messageHash);
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(2, ethHash); // Wrong private key
         bytes memory signature = abi.encodePacked(r, s, v);
 
@@ -470,8 +487,8 @@ contract LiquidityPoolTest is Test {
         // Balance before second deposit was 11 ether (1 original + 10 donated)
         // So shares = (1 ether * 1 ether) / 11 ether = 1/11 ether
         uint256 totalSupplyBefore = initialDeposit; // 1 ether
-        uint256 expectedShares = (secondDeposit * totalSupplyBefore)
-            / balanceBeforeSecondDeposit;
+        uint256 expectedShares =
+            (secondDeposit * totalSupplyBefore) / balanceBeforeSecondDeposit;
 
         assertEq(user2Shares, expectedShares);
         assertLt(user2Shares, secondDeposit); // Gets fewer shares due to donation attack
@@ -497,9 +514,11 @@ contract LiquidityPoolTest is Test {
         uint256 nonce = pool.nonces(signer);
         uint256 expiry = block.timestamp + 1 days;
         bytes32 messageHash = keccak256(
-            abi.encodePacked(address(pool), block.chainid, signer, rewardAmount, nonce, expiry)
+            abi.encodePacked(
+                address(pool), block.chainid, signer, rewardAmount, nonce, expiry
+            )
         );
-        bytes32 ethHash = ECDSA.toEthSignedMessageHash(messageHash);
+        bytes32 ethHash = MessageHashUtils.toEthSignedMessageHash(messageHash);
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, ethHash);
         bytes memory signature = abi.encodePacked(r, s, v);
 

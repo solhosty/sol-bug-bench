@@ -4,11 +4,14 @@ pragma solidity ^0.8.0;
 import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Burnable.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/interfaces/IERC1271.sol";
-import "@openzeppelin/contracts/utils/Address.sol";
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
-import "./StableCoin.sol";
+import "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 
-contract LiquidityPool;
+interface ILiquidityPool {
+    function lastDepositTime(address user) external view returns (uint256);
+
+    function WITHDRAWAL_DELAY() external view returns (uint256);
+}
 
 /**
  * @title PoolShare
@@ -18,10 +21,13 @@ contract LiquidityPool;
  * The supply directly correlates to the total liquidity provided to the protocol.
  */
 contract PoolShare is ERC20Burnable, Ownable {
-    LiquidityPool public immutable pool;
+    ILiquidityPool public immutable pool;
 
-    constructor(address poolAddress) ERC20("Liquidity Pool Share", "LPS") Ownable(msg.sender) {
-        pool = LiquidityPool(poolAddress);
+    constructor(address poolAddress)
+        ERC20("Liquidity Pool Share", "LPS")
+        Ownable(msg.sender)
+    {
+        pool = ILiquidityPool(poolAddress);
     }
 
     /**
@@ -34,13 +40,15 @@ contract PoolShare is ERC20Burnable, Ownable {
         _mint(to, amount);
     }
 
-    function _beforeTokenTransfer(address from, address to, uint256) internal override {
+    function _update(address from, address to, uint256 value) internal override {
         if (from != address(0) && to != address(0)) {
             require(
                 block.timestamp >= pool.lastDepositTime(from) + pool.WITHDRAWAL_DELAY(),
                 "Withdrawal delay not met"
             );
         }
+
+        super._update(from, to, value);
     }
 }
 
@@ -150,8 +158,8 @@ contract LiquidityPool is Ownable {
         bytes32 messageHash = keccak256(
             abi.encodePacked(address(this), block.chainid, user, amount, nonce, expiry)
         );
-        bytes32 ethHash = ECDSA.toEthSignedMessageHash(messageHash);
-        if (Address.isContract(user)) {
+        bytes32 ethHash = MessageHashUtils.toEthSignedMessageHash(messageHash);
+        if (user.code.length > 0) {
             require(
                 IERC1271(user).isValidSignature(ethHash, signature)
                     == IERC1271.isValidSignature.selector,
