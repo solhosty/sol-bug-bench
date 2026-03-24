@@ -70,10 +70,9 @@ contract LiquidityPoolTest is Test {
         pool.deposit{value: secondDeposit}();
 
         // Calculate expected shares for second deposit
-        // When second deposit happens: totalSupply = 1 ether, new balance will be 1.5 ether
-        // shares = (0.5 * 1) / 1.5 = 0.333... ether
-        uint256 expectedShares =
-            (secondDeposit * firstDeposit) / (firstDeposit + secondDeposit);
+        // totalSupply before second deposit is 1 ether and pre-deposit balance is 1 ether
+        // shares = (0.5 ether * 1 ether) / 1 ether = 0.5 ether
+        uint256 expectedShares = (secondDeposit * firstDeposit) / firstDeposit;
 
         assertEq(shareToken.balanceOf(user1), firstDeposit);
         assertEq(shareToken.balanceOf(user2), expectedShares);
@@ -249,7 +248,7 @@ contract LiquidityPoolTest is Test {
     }
 
     function testShareCalculationVulnerableToInflation() public {
-        // This tests the donation attack vulnerability
+        // Donation attack should not use post-deposit balance in share calculation
         uint256 initialDeposit = 1 ether;
 
         // First deposit
@@ -259,24 +258,71 @@ contract LiquidityPoolTest is Test {
         // Attacker sends ETH directly to inflate the pool balance
         vm.deal(address(pool), address(pool).balance + 10 ether);
 
-        // Second deposit gets fewer shares due to inflated balance
+        // Second deposit should use pre-deposit balance for fair share calculation
         uint256 secondDeposit = 1 ether;
-        uint256 balanceBeforeSecondDeposit = address(pool).balance;
+        uint256 preDepositBalance = address(pool).balance;
+        uint256 totalSupplyBefore = shareToken.totalSupply();
 
         vm.prank(user2);
         pool.deposit{value: secondDeposit}();
 
-        // user2 should get fewer shares than they should
         uint256 user2Shares = shareToken.balanceOf(user2);
-        // The totalSupply before second deposit is 1 ether (from first user)
-        // Balance before second deposit was 11 ether (1 original + 10 donated)
-        // So shares = (1 ether * 1 ether) / 12 ether = 1/12 ether
-        uint256 totalSupplyBefore = initialDeposit; // 1 ether
-        uint256 expectedShares = (secondDeposit * totalSupplyBefore)
-            / (balanceBeforeSecondDeposit + secondDeposit);
+        uint256 expectedShares = (secondDeposit * totalSupplyBefore) / preDepositBalance;
+        uint256 oldInflatedShares =
+            (secondDeposit * totalSupplyBefore) / (preDepositBalance + secondDeposit);
 
         assertEq(user2Shares, expectedShares);
-        assertLt(user2Shares, secondDeposit); // Gets fewer shares due to donation attack
+        assertGt(user2Shares, oldInflatedShares);
+    }
+
+    function test_RevertWhen_DepositMintsZeroShares() public {
+        vm.prank(user1);
+        pool.deposit{value: 1 wei}();
+
+        vm.deal(address(pool), address(pool).balance + 100 ether);
+
+        vm.prank(user2);
+        vm.expectRevert("Zero shares");
+        pool.deposit{value: 1 wei}();
+    }
+
+    function testFirstDepositorAttackMitigated() public {
+        uint256 attackerDeposit = 1 wei;
+        uint256 victimDeposit = 1 ether;
+
+        vm.prank(user1);
+        pool.deposit{value: attackerDeposit}();
+
+        uint256 totalSupplyBeforeVictimDeposit = shareToken.totalSupply();
+        uint256 preDepositBalance = address(pool).balance;
+
+        vm.prank(user2);
+        pool.deposit{value: victimDeposit}();
+
+        uint256 expectedVictimShares =
+            (victimDeposit * totalSupplyBeforeVictimDeposit) / preDepositBalance;
+        assertEq(expectedVictimShares, victimDeposit);
+        assertEq(shareToken.balanceOf(user2), expectedVictimShares);
+        assertGt(shareToken.balanceOf(user2), 0);
+
+        skip(pool.WITHDRAWAL_DELAY());
+
+        vm.startPrank(user1);
+        shareToken.approve(address(pool), attackerDeposit);
+        uint256 attackerBalanceBeforeWithdraw = user1.balance;
+        pool.withdraw(attackerDeposit);
+        vm.stopPrank();
+
+        assertEq(user1.balance, attackerBalanceBeforeWithdraw + attackerDeposit);
+        assertEq(address(pool).balance, victimDeposit);
+
+        vm.startPrank(user2);
+        shareToken.approve(address(pool), expectedVictimShares);
+        uint256 victimBalanceBeforeWithdraw = user2.balance;
+        pool.withdraw(expectedVictimShares);
+        vm.stopPrank();
+
+        assertEq(user2.balance, victimBalanceBeforeWithdraw + victimDeposit);
     }
 
     function testRewardClaimingWithReentrancy() public {

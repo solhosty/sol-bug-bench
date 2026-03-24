@@ -157,14 +157,18 @@ contract LiquidityPool is Ownable {
      */
     function _processDeposit(address user, uint256 amount) internal {
         // Calculate shares based on current pool ratio
+        uint256 totalShares = shareToken.totalSupply();
         uint256 shares;
-        if (shareToken.totalSupply() == 0) {
+        if (totalShares == 0) {
             // First deposit gets 1:1 share ratio
             shares = amount;
         } else {
             // Subsequent deposits get proportional shares
-            shares = (amount * shareToken.totalSupply()) / address(this).balance;
+            uint256 preDepositBalance = address(this).balance - amount;
+            shares = (amount * totalShares) / preDepositBalance;
         }
+
+        require(shares > 0, "Zero shares");
 
         // Mint shares to the user
         shareToken.mint(user, shares);
