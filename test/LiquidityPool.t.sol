@@ -53,7 +53,7 @@ contract LiquidityPoolTest is Test {
 
         assertEq(shareToken.balanceOf(user1), depositAmount);
         assertEq(pool.rewards(user1), (depositAmount * pool.REWARD_RATE()) / 100);
-        assertEq(pool.lastDepositTime(user1), block.timestamp);
+        assertEq(pool.lastDepositTime(user1), 0);
         assertEq(address(pool).balance, depositAmount);
     }
 
@@ -244,8 +244,33 @@ contract LiquidityPoolTest is Test {
 
         uint256 secondDepositTime = pool.lastDepositTime(user1);
 
-        assertGt(secondDepositTime, firstDepositTime);
-        assertEq(secondDepositTime, block.timestamp);
+        assertEq(secondDepositTime, firstDepositTime);
+    }
+
+    function testDepositForGriefingMitigated() public {
+        uint256 firstDeposit = 1 ether;
+
+        vm.prank(user1);
+        pool.deposit{value: firstDeposit}();
+
+        uint256 firstDepositTime = pool.lastDepositTime(user1);
+
+        skip(pool.WITHDRAWAL_DELAY() - 1 hours);
+
+        vm.prank(user2);
+        pool.depositFor{value: 1}(user1);
+
+        assertEq(pool.lastDepositTime(user1), firstDepositTime);
+
+        vm.startPrank(user1);
+        uint256 userShares = shareToken.balanceOf(user1);
+        shareToken.approve(address(pool), userShares);
+
+        skip(1 hours);
+        pool.withdraw(userShares);
+        vm.stopPrank();
+
+        assertEq(shareToken.balanceOf(user1), 0);
     }
 
     function testShareCalculationVulnerableToInflation() public {
