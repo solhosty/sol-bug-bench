@@ -79,7 +79,7 @@ contract LiquidityPool is Ownable {
      */
     function deposit() external payable {
         require(msg.value > 0, "Invalid deposit");
-        _processDeposit(msg.sender, msg.value);
+        _processDeposit(msg.sender, msg.sender, msg.value);
     }
 
     /**
@@ -89,7 +89,7 @@ contract LiquidityPool is Ownable {
      */
     function depositFor(address user) external payable {
         require(msg.value > 0, "Invalid deposit");
-        _processDeposit(user, msg.value);
+        _processDeposit(msg.sender, user, msg.value);
     }
 
     /**
@@ -168,10 +168,12 @@ contract LiquidityPool is Ownable {
     /**
      * @dev Internal function to handle deposit logic for any user
      * Calculates shares, mints tokens, and allocates rewards
+     * Withdrawal delay refreshes only for self-deposits.
+     * @param payer The address sending ETH for the deposit
      * @param user The address receiving shares and rewards
      * @param amount The ETH amount being deposited
      */
-    function _processDeposit(address user, uint256 amount) internal {
+    function _processDeposit(address payer, address user, uint256 amount) internal {
         // Calculate shares based on current pool ratio
         uint256 totalSupply = shareToken.totalSupply();
         uint256 managedAssets = totalManagedAssets;
@@ -187,8 +189,10 @@ contract LiquidityPool is Ownable {
         uint256 rewardAmount = (amount * REWARD_RATE) / 100;
         rewards[user] += rewardAmount;
 
-        // Update last deposit time for withdrawal delay calculation
-        lastDepositTime[user] = block.timestamp;
+        // Update withdrawal delay only when users deposit for themselves
+        if (payer == user) {
+            lastDepositTime[user] = block.timestamp;
+        }
 
         // Emit event for tracking deposits
         emit Deposit(user, amount, shares);
