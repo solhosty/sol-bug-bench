@@ -16,6 +16,14 @@ import "./StableCoin.sol";
 contract PoolShare is ERC20Burnable, Ownable {
     constructor() ERC20("Liquidity Pool Share", "LPS") Ownable(msg.sender) {}
 
+    function _update(address from, address to, uint256 value) internal override {
+        require(
+            from == address(0) || to == address(0),
+            "Pool shares are non-transferable"
+        );
+        super._update(from, to, value);
+    }
+
     /**
      * @dev Mints new pool share tokens
      * Only callable by the pool contract to maintain proper accounting
@@ -112,8 +120,7 @@ contract LiquidityPool is Ownable {
         require(success, "Transfer failed");
 
         // Burn the shares to maintain proper accounting
-        shareToken.transferFrom(msg.sender, address(this), shares);
-        shareToken.burn(shares);
+        shareToken.burnFrom(msg.sender, shares);
         emit Withdrawal(msg.sender, amount, shares);
     }
 
