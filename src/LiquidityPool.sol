@@ -140,13 +140,13 @@ contract LiquidityPool is Ownable {
 
         // Transfer remaining amount to user
         (bool success,) = msg.sender.call{value: userAmount}("");
-        if (success) {
-            rewards[user] -= amount;
-            nonces[user]++;
+        require(success, "Transfer failed");
 
-            // Emit event for tracking reward claims
-            emit RewardClaimed(user, userAmount);
-        }
+        rewards[user] -= amount;
+        nonces[user]++;
+
+        // Emit event for tracking reward claims
+        emit RewardClaimed(user, userAmount);
     }
 
     /**
