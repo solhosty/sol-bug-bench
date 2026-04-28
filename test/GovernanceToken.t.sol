@@ -45,6 +45,14 @@ contract GovernanceTokenTest is Test {
         assertEq(token.balanceOf(user2), 1000 * 10 ** 18 + mintAmount);
     }
 
+    function testUnauthorizedMintReverts() public {
+        vm.prank(user1);
+        vm.expectRevert(
+            abi.encodeWithSignature("OwnableUnauthorizedAccount(address)", user1)
+        );
+        token.mint(user2, 1 * 10 ** 18);
+    }
+
     function testBlacklisting() public {
         // Initially not blacklisted
         assertFalse(token.blacklisted(user1));
@@ -56,6 +64,14 @@ contract GovernanceTokenTest is Test {
         // Unblacklist user1
         token.updateUserStatus(user1, false);
         assertFalse(token.blacklisted(user1));
+    }
+
+    function testUnauthorizedUpdateUserStatusReverts() public {
+        vm.prank(user1);
+        vm.expectRevert(
+            abi.encodeWithSignature("OwnableUnauthorizedAccount(address)", user1)
+        );
+        token.updateUserStatus(user2, true);
     }
 
     function testTransferWithBlacklist() public {
