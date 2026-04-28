@@ -344,17 +344,14 @@ contract StableCoinTest is Test {
         vm.stopPrank();
     }
 
-    function testMintAccessControlIssue() public {
-        // Test that anyone can mint (this is the known bug)
+    function testUnauthorizedMintReverts() public {
         uint256 mintAmount = 1000 * 10 ** stablecoin.decimals();
 
-        // User1 (not owner) can mint tokens to anyone
         vm.prank(user1);
-        stablecoin.mint(user2, mintAmount);
-
-        assertEq(
-            stablecoin.balanceOf(user2), (10000000 + 1000) * 10 ** stablecoin.decimals()
+        vm.expectRevert(
+            abi.encodeWithSignature("OwnableUnauthorizedAccount(address)", user1)
         );
+        stablecoin.mint(user2, mintAmount);
     }
 
     // New tests for stream-specific functionality
