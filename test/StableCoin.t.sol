@@ -505,17 +505,29 @@ contract StableCoinTest is Test {
         assertEq(availableAfterTopUp, availableBeforeTopUp);
     }
 
-    function testUpdateStreamRecipientBeforeVesting() public {
+    function testUpdateStreamRecipientBeforeVestingOnlyBackToSender() public {
         uint256 depositAmount = 1000 * 10 ** stablecoin.decimals();
+        address thirdParty = makeAddr("thirdParty");
 
         vm.startPrank(user1);
         stablecoin.approve(address(streamer), depositAmount);
-        uint256 streamId = streamer.createStream(user1, depositAmount, STREAM_DURATION);
-        streamer.updateStreamRecipient(streamId, user2);
+        uint256 streamId = streamer.createStream(user2, depositAmount, STREAM_DURATION);
+
+        vm.expectRevert(abi.encodeWithSelector(TokenStreamer.InvalidRecipient.selector));
+        streamer.updateStreamRecipient(streamId, thirdParty);
+
+        streamer.updateStreamRecipient(streamId, user1);
         vm.stopPrank();
 
         (address recipient,,,,,) = streamer.getStreamInfo(streamId);
-        assertEq(recipient, user2);
+        assertEq(recipient, user1);
+
+        uint256[] memory user2Streams = streamer.getUserStreams(user2);
+        assertEq(user2Streams.length, 0);
+
+        uint256[] memory user1Streams = streamer.getUserStreams(user1);
+        assertEq(user1Streams.length, 1);
+        assertEq(user1Streams[0], streamId);
     }
 
     function testRevertWhenUpdateStreamRecipientAfterVestingStarts() public {
@@ -523,13 +535,13 @@ contract StableCoinTest is Test {
 
         vm.startPrank(user1);
         stablecoin.approve(address(streamer), depositAmount);
-        uint256 streamId = streamer.createStream(user1, depositAmount, STREAM_DURATION);
+        uint256 streamId = streamer.createStream(user2, depositAmount, STREAM_DURATION);
         vm.stopPrank();
 
         skip(1);
 
-        vm.prank(user1);
+        vm.prank(user2);
         vm.expectRevert(abi.encodeWithSelector(TokenStreamer.StreamAlreadyActive.selector));
-        streamer.updateStreamRecipient(streamId, user2);
+        streamer.updateStreamRecipient(streamId, user1);
     }
 }

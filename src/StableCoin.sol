@@ -204,8 +204,14 @@ contract TokenStreamer {
         if (msg.sender != stream.recipient && msg.sender != stream.sender) {
             revert NotAuthorized();
         }
-        if (block.timestamp > stream.startTime || stream.vestedCheckpoint > 0) {
+        if (
+            block.timestamp > stream.startTime || stream.vestedCheckpoint > 0
+                || stream.totalWithdrawn > 0
+        ) {
             revert StreamAlreadyActive();
+        }
+        if (newRecipient != stream.sender) {
+            revert InvalidRecipient();
         }
 
         address previousRecipient = stream.recipient;
