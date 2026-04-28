@@ -28,6 +28,7 @@ contract TokenStreamer {
     error NotStreamRecipient();
     error StreamEnded();
     error InvalidRecipient();
+    error NotAuthorized();
 
     event StreamCreated(
         uint256 indexed streamId,
@@ -46,13 +47,23 @@ contract TokenStreamer {
         address indexed sender,
         uint256 amount
     );
+    event StreamRecipientUpdated(
+        uint256 indexed streamId,
+        address indexed previousRecipient,
+        address indexed newRecipient,
+        address updater
+    );
 
     struct Stream {
+        address sender;
         address recipient;
         uint256 totalDeposited;
         uint256 totalWithdrawn;
         uint256 startTime;
         uint256 endTime;
+        uint256 vestedCheckpoint;
+        uint256 unvestedCheckpoint;
+        uint256 checkpointTime;
         bool exists;
     }
 
@@ -88,11 +99,15 @@ contract TokenStreamer {
         nextStreamId += 1;
 
         streams[streamId] = Stream({
+            sender: msg.sender,
             recipient: recipient,
             totalDeposited: amount,
             totalWithdrawn: 0,
             startTime: block.timestamp,
             endTime: block.timestamp + duration,
+            vestedCheckpoint: 0,
+            unvestedCheckpoint: amount,
+            checkpointTime: block.timestamp,
             exists: true
         });
 
@@ -117,7 +132,9 @@ contract TokenStreamer {
         bool success = stablecoin.transferFrom(msg.sender, address(this), amount);
         require(success, "Transfer failed");
 
+        _syncVesting(stream);
         stream.totalDeposited += amount;
+        stream.unvestedCheckpoint += amount;
 
         emit StreamDeposit(streamId, msg.sender, amount);
     }
@@ -150,9 +167,14 @@ contract TokenStreamer {
         if (!stream.exists) {
             return 0;
         }
+        if (block.timestamp >= stream.endTime) {
+            return 0;
+        }
 
-        uint256 duration = stream.endTime - stream.startTime;
-        return stream.totalDeposited / duration;
+        uint256 vested = _vestedAmount(stream, block.timestamp);
+        uint256 remainingUnvested = stream.totalDeposited - vested;
+        uint256 remainingDuration = stream.endTime - block.timestamp;
+        return remainingUnvested / remainingDuration;
     }
 
     function getAvailableTokens(uint256 streamId) public view returns (uint256) {
@@ -161,21 +183,80 @@ contract TokenStreamer {
             return 0;
         }
 
-        uint256 duration = stream.endTime - stream.startTime;
-        uint256 elapsed;
-        if (block.timestamp >= stream.endTime) {
-            elapsed = duration;
-        } else if (block.timestamp <= stream.startTime) {
-            elapsed = 0;
-        } else {
-            elapsed = block.timestamp - stream.startTime;
-        }
-
-        uint256 vested = (stream.totalDeposited * elapsed) / duration;
+        uint256 vested = _vestedAmount(stream, block.timestamp);
         if (vested <= stream.totalWithdrawn) {
             return 0;
         }
         return vested - stream.totalWithdrawn;
+    }
+
+    function updateStreamRecipient(uint256 streamId, address newRecipient) external {
+        Stream storage stream = streams[streamId];
+        if (!stream.exists) {
+            revert StreamNotFound();
+        }
+        if (newRecipient == address(0)) {
+            revert InvalidRecipient();
+        }
+        if (msg.sender != stream.recipient && msg.sender != stream.sender) {
+            revert NotAuthorized();
+        }
+
+        address previousRecipient = stream.recipient;
+        if (previousRecipient == newRecipient) {
+            revert InvalidRecipient();
+        }
+
+        _removeUserStream(previousRecipient, streamId);
+        userStreams[newRecipient].push(streamId);
+        stream.recipient = newRecipient;
+
+        emit StreamRecipientUpdated(
+            streamId,
+            previousRecipient,
+            newRecipient,
+            msg.sender
+        );
+    }
+
+    function _vestedAmount(
+        Stream storage stream,
+        uint256 timestamp
+    ) internal view returns (uint256) {
+        if (timestamp >= stream.endTime) {
+            return stream.vestedCheckpoint + stream.unvestedCheckpoint;
+        }
+        if (timestamp <= stream.checkpointTime) {
+            return stream.vestedCheckpoint;
+        }
+
+        uint256 checkpointDuration = stream.endTime - stream.checkpointTime;
+        uint256 elapsedSinceCheckpoint = timestamp - stream.checkpointTime;
+        uint256 newlyVested =
+            (stream.unvestedCheckpoint * elapsedSinceCheckpoint) /
+            checkpointDuration;
+
+        return stream.vestedCheckpoint + newlyVested;
+    }
+
+    function _syncVesting(Stream storage stream) internal {
+        uint256 vestedNow = _vestedAmount(stream, block.timestamp);
+        stream.vestedCheckpoint = vestedNow;
+        stream.unvestedCheckpoint = stream.totalDeposited - vestedNow;
+        stream.checkpointTime = block.timestamp;
+    }
+
+    function _removeUserStream(address user, uint256 streamId) internal {
+        uint256[] storage streamsForUser = userStreams[user];
+        uint256 length = streamsForUser.length;
+
+        for (uint256 i = 0; i < length; i++) {
+            if (streamsForUser[i] == streamId) {
+                streamsForUser[i] = streamsForUser[length - 1];
+                streamsForUser.pop();
+                break;
+            }
+        }
     }
 
     function getStreamInfo(
