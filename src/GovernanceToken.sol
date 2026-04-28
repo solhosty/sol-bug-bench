@@ -59,6 +59,12 @@ contract GroupStaking {
             "Members and weights length mismatch"
         );
 
+        for (uint256 i = 0; i < members.length; i++) {
+            for (uint256 j = i + 1; j < members.length; j++) {
+                require(members[i] != members[j], "Duplicate members");
+            }
+        }
+
         uint256 totalWeight = 0;
         for (uint256 i = 0; i < weights.length; i++) {
             totalWeight += weights[i];
