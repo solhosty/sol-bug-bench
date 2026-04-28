@@ -29,6 +29,7 @@ contract TokenStreamer {
     error StreamEnded();
     error InvalidRecipient();
     error NotAuthorized();
+    error StreamAlreadyActive();
 
     event StreamCreated(
         uint256 indexed streamId,
@@ -132,9 +133,11 @@ contract TokenStreamer {
         bool success = stablecoin.transferFrom(msg.sender, address(this), amount);
         require(success, "Transfer failed");
 
-        _syncVesting(stream);
-        stream.totalDeposited += amount;
-        stream.unvestedCheckpoint += amount;
+        uint256 vestedAtTopUp = _syncVesting(stream);
+        uint256 unvestedAtTopUp = stream.totalDeposited - vestedAtTopUp;
+
+        stream.totalDeposited = vestedAtTopUp + unvestedAtTopUp + amount;
+        stream.unvestedCheckpoint = unvestedAtTopUp + amount;
 
         emit StreamDeposit(streamId, msg.sender, amount);
     }
@@ -201,6 +204,9 @@ contract TokenStreamer {
         if (msg.sender != stream.recipient && msg.sender != stream.sender) {
             revert NotAuthorized();
         }
+        if (block.timestamp > stream.startTime || stream.vestedCheckpoint > 0) {
+            revert StreamAlreadyActive();
+        }
 
         address previousRecipient = stream.recipient;
         if (previousRecipient == newRecipient) {
@@ -239,8 +245,8 @@ contract TokenStreamer {
         return stream.vestedCheckpoint + newlyVested;
     }
 
-    function _syncVesting(Stream storage stream) internal {
-        uint256 vestedNow = _vestedAmount(stream, block.timestamp);
+    function _syncVesting(Stream storage stream) internal returns (uint256 vestedNow) {
+        vestedNow = _vestedAmount(stream, block.timestamp);
         stream.vestedCheckpoint = vestedNow;
         stream.unvestedCheckpoint = stream.totalDeposited - vestedNow;
         stream.checkpointTime = block.timestamp;

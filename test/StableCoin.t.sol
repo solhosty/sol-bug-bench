@@ -484,4 +484,52 @@ contract StableCoinTest is Test {
         streamer.addToStream(streamId, additionalDeposit);
         vm.stopPrank();
     }
+
+    function testAddToStreamDoesNotRetroactivelyVestTopUp() public {
+        uint256 firstDeposit = 2592000 * 10 ** stablecoin.decimals();
+        uint256 secondDeposit = 2592000 * 10 ** stablecoin.decimals();
+
+        vm.startPrank(user1);
+        stablecoin.approve(address(streamer), firstDeposit + secondDeposit);
+        uint256 streamId = streamer.createStream(user1, firstDeposit, STREAM_DURATION);
+        vm.stopPrank();
+
+        skip(15 days);
+
+        uint256 availableBeforeTopUp = streamer.getAvailableTokens(streamId);
+
+        vm.prank(user1);
+        streamer.addToStream(streamId, secondDeposit);
+
+        uint256 availableAfterTopUp = streamer.getAvailableTokens(streamId);
+        assertEq(availableAfterTopUp, availableBeforeTopUp);
+    }
+
+    function testUpdateStreamRecipientBeforeVesting() public {
+        uint256 depositAmount = 1000 * 10 ** stablecoin.decimals();
+
+        vm.startPrank(user1);
+        stablecoin.approve(address(streamer), depositAmount);
+        uint256 streamId = streamer.createStream(user1, depositAmount, STREAM_DURATION);
+        streamer.updateStreamRecipient(streamId, user2);
+        vm.stopPrank();
+
+        (address recipient,,,,,) = streamer.getStreamInfo(streamId);
+        assertEq(recipient, user2);
+    }
+
+    function testRevertWhenUpdateStreamRecipientAfterVestingStarts() public {
+        uint256 depositAmount = 1000 * 10 ** stablecoin.decimals();
+
+        vm.startPrank(user1);
+        stablecoin.approve(address(streamer), depositAmount);
+        uint256 streamId = streamer.createStream(user1, depositAmount, STREAM_DURATION);
+        vm.stopPrank();
+
+        skip(1);
+
+        vm.prank(user1);
+        vm.expectRevert(abi.encodeWithSelector(TokenStreamer.StreamAlreadyActive.selector));
+        streamer.updateStreamRecipient(streamId, user2);
+    }
 }
