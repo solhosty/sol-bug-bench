@@ -53,6 +53,8 @@ contract LiquidityPool is Ownable {
     mapping(address => uint256) public rewards;
     // Nonces for signature verification to prevent replay attacks
     mapping(address => uint256) public nonces;
+    // Nonces for delegated deposit authorization to prevent replay attacks
+    mapping(address => uint256) public depositForNonces;
     // Timestamp tracking for withdrawal delay enforcement
     mapping(address => uint256) public lastDepositTime;
 
@@ -83,12 +85,47 @@ contract LiquidityPool is Ownable {
     }
 
     /**
-     * @dev Allows deposits on behalf of other users
-     * Useful for institutional integrations and third-party services
+     * @dev Allows users to deposit through the depositFor flow for themselves
      * @param user The address that will receive the shares and rewards
      */
     function depositFor(address user) external payable {
         require(msg.value > 0, "Invalid deposit");
+        require(msg.sender == user, "Authorization required");
+        _processDeposit(msg.sender, user, msg.value);
+    }
+
+    /**
+     * @dev Allows deposits on behalf of other users with explicit user consent
+     * @param user The address that will receive the shares and rewards
+     * @param nonce The recipient's current delegated deposit nonce
+     * @param signature Signature from user over delegated deposit authorization
+     */
+    function depositFor(
+        address user,
+        uint256 nonce,
+        bytes calldata signature
+    ) external payable {
+        require(msg.value > 0, "Invalid deposit");
+
+        if (msg.sender != user) {
+            require(depositForNonces[user] == nonce, "Invalid nonce");
+
+            bytes32 messageHash = keccak256(
+                abi.encode(
+                    user,
+                    msg.sender,
+                    msg.value,
+                    nonce,
+                    address(this),
+                    block.chainid
+                )
+            );
+            address signer = ECDSA.recover(messageHash, signature);
+            require(signer == user, "Invalid signature");
+
+            depositForNonces[user] = nonce + 1;
+        }
+
         _processDeposit(msg.sender, user, msg.value);
     }
 
@@ -168,7 +205,7 @@ contract LiquidityPool is Ownable {
     /**
      * @dev Internal function to handle deposit logic for any user
      * Calculates shares, mints tokens, and allocates rewards
-     * Withdrawal delay refreshes only for self-deposits.
+     * Withdrawal delay refreshes when deposits are authorized for that user.
      * @param payer The address sending ETH for the deposit
      * @param user The address receiving shares and rewards
      * @param amount The ETH amount being deposited
