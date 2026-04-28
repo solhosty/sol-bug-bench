@@ -89,6 +89,15 @@ contract GroupStaking {
         Group storage group = groups[groupId];
         require(group.exists, "Group does not exist");
 
+        bool isMember = false;
+        for (uint256 i = 0; i < group.members.length; i++) {
+            if (group.members[i] == msg.sender) {
+                isMember = true;
+                break;
+            }
+        }
+        require(isMember, "Not a group member");
+
         bool success = token.transferFrom(msg.sender, address(this), amount);
         require(success, "Transfer failed");
 
