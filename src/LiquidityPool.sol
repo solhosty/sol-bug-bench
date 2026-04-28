@@ -38,6 +38,8 @@ contract PoolShare is ERC20Burnable, Ownable {
 contract LiquidityPool is Ownable {
     PoolShare public immutable shareToken;
     uint256 private totalManagedAssets;
+    uint256 private constant VIRTUAL_ASSETS = 1;
+    uint256 private constant VIRTUAL_SHARES = 1;
 
     // User reward balances tracked separately for efficiency
     mapping(address => uint256) public rewards;
@@ -100,7 +102,8 @@ contract LiquidityPool is Ownable {
         uint256 managedAssets = totalManagedAssets;
 
         // Calculate ETH amount based on proportional share of managed assets
-        uint256 amount = shares * managedAssets / totalSupply;
+        uint256 amount = (shares * (managedAssets + VIRTUAL_ASSETS))
+            / (totalSupply + VIRTUAL_SHARES);
 
         totalManagedAssets = managedAssets - amount;
 
@@ -163,17 +166,11 @@ contract LiquidityPool is Ownable {
      */
     function _processDeposit(address user, uint256 amount, bool updateDelay) internal {
         // Calculate shares based on current pool ratio
-        uint256 shares;
         uint256 totalSupply = shareToken.totalSupply();
         uint256 managedAssets = totalManagedAssets;
-
-        if (totalSupply == 0) {
-            // First deposit gets 1:1 share ratio
-            shares = amount;
-        } else {
-            // Subsequent deposits get proportional shares
-            shares = (amount * totalSupply) / managedAssets;
-        }
+        uint256 shares = (amount * (totalSupply + VIRTUAL_SHARES))
+            / (managedAssets + VIRTUAL_ASSETS);
+        require(shares > 0, "Zero shares");
 
         // Mint shares to the user
         shareToken.mint(user, shares);
