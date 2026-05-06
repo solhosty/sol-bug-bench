@@ -46,6 +46,10 @@ python3 fetch_issues.py
 
 **Output:** The script generates `issues.json` containing all vulnerability data in a simple array format, making it easy to integrate with security analysis tools or create custom reports.
 
+## Transfer & Withdraw Contracts
+
+- `src/Transfer.sol` demonstrates forwarding ETH and ERC20 tokens from the caller to a recipient contract or EOA.
+- `src/Withdraw.sol` demonstrates a simple ETH vault pattern with `deposit` and `withdraw` flows tracked per user balance.
 
 ## Educational Use
 
