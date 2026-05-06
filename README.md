@@ -5,6 +5,19 @@ This repository contains a collection of intentionally vulnerable Solidity smart
 
 The project is designed to be a growing collection of vulnerable contracts. We plan to continuously add more contracts with diverse vulnerability types in the future to create a comprehensive benchmark for smart contract security tools and training.
 
+## Recent Addition: NewToken
+
+The repository now includes `src/NewToken.sol`, a minimal ERC20 token with:
+- Constructor-based initial supply minting to the deployer
+- A public `mint(address to, uint256 amount)` function for simple testing scenarios
+
+Test coverage for this token is in `test/NewToken.t.sol` and includes:
+- Token metadata checks (`name`, `symbol`)
+- Initial supply and deployer balance checks
+- Mint behavior and total supply growth
+- Transfer success paths
+- Transfer failure when balance is insufficient
+
 
 ## Vulnerability Management
 
