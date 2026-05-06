@@ -1,9 +1,15 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
+pragma solidity ^0.8.4;
 
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
 contract StableCoin is ERC20 {
+    error ERC20InsufficientBalance(address sender, uint256 balance, uint256 needed);
+    error ERC20InvalidSender(address sender);
+    error ERC20InvalidReceiver(address receiver);
+    error ERC20InsufficientAllowance(address spender, uint256 allowance, uint256 needed);
+    error ERC20InvalidSpender(address spender);
+
     event TokensMinted(address indexed to, uint256 amount);
 
     constructor() ERC20("USD Stable", "USDS") {
@@ -17,6 +23,52 @@ contract StableCoin is ERC20 {
     function mint(address to, uint256 amount) external {
         _mint(to, amount);
         emit TokensMinted(to, amount);
+    }
+
+    function transfer(address to, uint256 value) public override returns (bool) {
+        address sender = _msgSender();
+        if (sender == address(0)) {
+            revert ERC20InvalidSender(address(0));
+        }
+        if (to == address(0)) {
+            revert ERC20InvalidReceiver(address(0));
+        }
+
+        uint256 senderBalance = balanceOf(sender);
+        if (senderBalance < value) {
+            revert ERC20InsufficientBalance(sender, senderBalance, value);
+        }
+
+        return super.transfer(to, value);
+    }
+
+    function approve(address spender, uint256 value) public override returns (bool) {
+        if (spender == address(0)) {
+            revert ERC20InvalidSpender(address(0));
+        }
+
+        return super.approve(spender, value);
+    }
+
+    function transferFrom(address from, address to, uint256 value) public override returns (bool) {
+        if (from == address(0)) {
+            revert ERC20InvalidSender(address(0));
+        }
+        if (to == address(0)) {
+            revert ERC20InvalidReceiver(address(0));
+        }
+
+        uint256 currentAllowance = allowance(from, _msgSender());
+        if (currentAllowance < value) {
+            revert ERC20InsufficientAllowance(_msgSender(), currentAllowance, value);
+        }
+
+        uint256 fromBalance = balanceOf(from);
+        if (fromBalance < value) {
+            revert ERC20InsufficientBalance(from, fromBalance, value);
+        }
+
+        return super.transferFrom(from, to, value);
     }
 }
 

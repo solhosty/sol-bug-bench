@@ -1,9 +1,15 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
+pragma solidity ^0.8.4;
 
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
 contract GovernanceToken is ERC20 {
+    error ERC20InsufficientBalance(address sender, uint256 balance, uint256 needed);
+    error ERC20InvalidSender(address sender);
+    error ERC20InvalidReceiver(address receiver);
+    error ERC20InsufficientAllowance(address spender, uint256 allowance, uint256 needed);
+    error ERC20InvalidSpender(address spender);
+
     mapping(address => bool) public blacklisted;
 
     constructor() ERC20("DeFiHub Governance", "DFHG") {
@@ -18,14 +24,60 @@ contract GovernanceToken is ERC20 {
         blacklisted[user] = status;
     }
 
-    function _update(address from, address to, uint256 value) internal override {
+    function transfer(address to, uint256 value) public override returns (bool) {
+        address sender = _msgSender();
+        if (sender == address(0)) {
+            revert ERC20InvalidSender(address(0));
+        }
+        if (to == address(0)) {
+            revert ERC20InvalidReceiver(address(0));
+        }
+
+        uint256 senderBalance = balanceOf(sender);
+        if (senderBalance < value) {
+            revert ERC20InsufficientBalance(sender, senderBalance, value);
+        }
+
+        return super.transfer(to, value);
+    }
+
+    function approve(address spender, uint256 value) public override returns (bool) {
+        if (spender == address(0)) {
+            revert ERC20InvalidSpender(address(0));
+        }
+
+        return super.approve(spender, value);
+    }
+
+    function transferFrom(address from, address to, uint256 value) public override returns (bool) {
+        if (from == address(0)) {
+            revert ERC20InvalidSender(address(0));
+        }
+        if (to == address(0)) {
+            revert ERC20InvalidReceiver(address(0));
+        }
+
+        uint256 currentAllowance = allowance(from, _msgSender());
+        if (currentAllowance < value) {
+            revert ERC20InsufficientAllowance(_msgSender(), currentAllowance, value);
+        }
+
+        uint256 fromBalance = balanceOf(from);
+        if (fromBalance < value) {
+            revert ERC20InsufficientBalance(from, fromBalance, value);
+        }
+
+        return super.transferFrom(from, to, value);
+    }
+
+    function _beforeTokenTransfer(address from, address to, uint256 amount) internal override {
         if (from != address(0)) {
             require(!blacklisted[from], "Sender is blacklisted");
         }
         if (to != address(0)) {
             require(!blacklisted[to], "Recipient is blacklisted");
         }
-        super._update(from, to, value);
+        super._beforeTokenTransfer(from, to, amount);
     }
 }
 

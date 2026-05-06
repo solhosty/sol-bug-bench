@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
+pragma solidity ^0.8.4;
 
 import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Burnable.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
@@ -14,7 +14,7 @@ import "./StableCoin.sol";
  * The supply directly correlates to the total liquidity provided to the protocol.
  */
 contract PoolShare is ERC20Burnable, Ownable {
-    constructor() ERC20("Liquidity Pool Share", "LPS") Ownable(msg.sender) {}
+    constructor() ERC20("Liquidity Pool Share", "LPS") {}
 
     /**
      * @dev Mints new pool share tokens
@@ -58,7 +58,7 @@ contract LiquidityPool is Ownable {
     /**
      * @dev Initializes the liquidity pool and deploys the share token
      */
-    constructor() Ownable(msg.sender) {
+    constructor() {
         shareToken = new PoolShare();
     }
 
