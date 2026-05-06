@@ -41,7 +41,7 @@ contract GatedNFTTest is Test {
 
     function test_RevertWhen_NonOwnerMints() public {
         vm.prank(alice);
-        vm.expectRevert();
+        vm.expectRevert(bytes("Ownable: caller is not the owner"));
         nft.mint(alice, "ipfs://x");
     }
 

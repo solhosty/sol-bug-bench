@@ -54,7 +54,7 @@ contract ERC721 {
     }
 
     function supportsInterface(bytes4 interfaceId) public pure returns (bool) {
-        return interfaceId == 0x80ac58cd || interfaceId == 0x01ffc9a7;
+        return interfaceId == 0x80ac58cd || interfaceId == 0x01ffc9a7 || interfaceId == 0x5b5e139f;
     }
 
     function balanceOf(address owner_) public view returns (uint256) {
