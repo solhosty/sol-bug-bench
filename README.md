@@ -66,6 +66,11 @@ We plan to expand this benchmark with:
 - Integration with popular testing frameworks
 - Automated vulnerability classification tools
 
+## Added Example Contracts
+
+- `src/SimpleNFT.sol`: Minimal ERC721 NFT contract that mints sequential token IDs with `mint(address to)`.
+- `src/SimpleWithdraw.sol`: Minimal ETH deposit/withdraw contract that tracks balances by sender and allows users to withdraw their own funds.
+
 ## Contributing
 
 When adding new vulnerabilities:
