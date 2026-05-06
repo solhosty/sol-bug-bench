@@ -1,35 +1,79 @@
-# Solidity Bug Bench
+# DeFiHub Solidity Bug Bench
 
-## Purpose
-This repository contains a collection of intentionally vulnerable Solidity smart contracts designed for educational and testing purposes. It serves as a resource for developers, security researchers, and students to learn about common vulnerabilities in smart contracts and practice vulnerability detection and analysis.
+[![CI](https://github.com/hans-cyfrin/sol-bug-bench/actions/workflows/test.yml/badge.svg)](https://github.com/hans-cyfrin/sol-bug-bench/actions/workflows/test.yml)
 
-The project is designed to be a growing collection of vulnerable contracts. We plan to continuously add more contracts with diverse vulnerability types in the future to create a comprehensive benchmark for smart contract security tools and training.
+DeFiHub is a decentralized finance protocol that combines governance, liquidity
+provision, and token streaming in a single Solidity codebase. This repository is
+also intentionally used as a smart contract security benchmark, so selected
+vulnerabilities are preserved for testing and education.
 
+> [!WARNING]
+> This project includes intentionally vulnerable code paths for security testing.
+> Do not deploy these contracts to production or use real funds.
 
-## Vulnerability Management
+## Protocol Overview
 
-### GitHub Issues as Vulnerability Documentation
-All vulnerabilities in this codebase are documented as GitHub issues in this repository. This approach provides:
-- Structured vulnerability reports with consistent formatting
-- Severity classification using GitHub labels
-- Community discussion and feedback capabilities
-- Version control for vulnerability discoveries and fixes
-- Easy integration with security tools and workflows
+DeFiHub is organized around three protocol pillars: governance participation,
+liquidity provision, and structured token distribution. The contracts model a
+realistic DeFi architecture while remaining compact enough for auditing,
+tool-benchmarking, and training workflows.
 
-### Issues Folder
-The `/issues` folder contains tooling for managing vulnerability data:
+## Contracts
 
-#### Structure
+| Contract | Description |
+| --- | --- |
+| `src/GovernanceToken.sol` | Governance token and group staking logic for weighted participation and rewards. |
+| `src/LiquidityPool.sol` | ETH liquidity pool and share-token accounting with reward and withdrawal flows. |
+| `src/StableCoin.sol` | Stablecoin and token streaming primitives for time-based distribution scenarios. |
+
+Known vulnerabilities are tracked in the
+[GitHub Issues](https://github.com/hans-cyfrin/sol-bug-bench/issues) tab using
+severity labels.
+
+## Prerequisites
+
+- [Foundry](https://book.getfoundry.sh/getting-started/installation)
+- Git
+
+## Installation
+
+```bash
+git clone --recurse-submodules https://github.com/hans-cyfrin/sol-bug-bench.git
+cd sol-bug-bench
+forge install
+forge build
 ```
-issues/
-├── fetch_issues.py     # Python script to fetch vulnerabilities from GitHub API
-├── requirements.txt    # Python dependencies
-├── issues.json        # All GitHub issues data in JSON format
-└── findings.json      # Template for security findings
+
+## Testing
+
+```bash
+# Run full suite
+forge test
+
+# Verbose output
+forge test -vvv
+
+# Contract-specific tests
+forge test --match-contract GovernanceTokenTest
+forge test --match-contract LiquidityPoolTest
+forge test --match-contract StableCoinTest
 ```
 
-#### Issue Fetching Script
-The `fetch_issues.py` script automatically pulls all open vulnerabilities from the GitHub repository:
+## Formatting
+
+```bash
+forge fmt
+```
+
+## Documentation
+
+- `docs/DeFiHub.md`: full protocol architecture and flow documentation
+- `docs/known_issue.md`: example known issue and vulnerable pattern notes
+
+## Issues Tooling
+
+The `issues/` folder includes scripts for pulling vulnerability metadata from
+GitHub and exporting it as JSON.
 
 ```bash
 cd issues
@@ -37,41 +81,14 @@ python3 -m pip install -r requirements.txt
 python3 fetch_issues.py
 ```
 
-**Features:**
-- Fetches all open GitHub issues via API
-- Extracts severity levels from issue labels
-- Saves clean JSON data with only essential fields (id, title, body, severity)
-- Handles pagination for repositories with many issues
-- Filters out pull requests automatically
-
-**Output:** The script generates `issues.json` containing all vulnerability data in a simple array format, making it easy to integrate with security analysis tools or create custom reports.
-
-
-## Educational Use
-
-This repository is designed for:
-- Smart contract security training and workshops
-- Vulnerability research and detection tool testing
-- Security tool benchmarking and validation
-- Bug bounty preparation and practice
-- Academic research in blockchain security
-- Developing and testing automated vulnerability scanners
-
-## Future Expansion
-
-We plan to expand this benchmark with:
-- Additional contract types (DeFi protocols, NFTs, DAOs, etc.)
-- More diverse vulnerability categories
-- Contracts of varying complexity levels
-- Integration with popular testing frameworks
-- Automated vulnerability classification tools
-
 ## Contributing
 
-When adding new vulnerabilities:
-1. Create a GitHub issue with detailed vulnerability description
-2. Use appropriate severity labels (Critical, High, Medium, Low)
-3. Include proof of concept and recommended mitigation
-4. Follow the established issue template format
+- Add new vulnerable or fixed benchmark scenarios as focused Solidity contracts
+  and tests.
+- File GitHub issues for vulnerabilities with severity labels (`Critical`,
+  `High`, `Medium`, `Low`) and clear reproduction notes.
+- Keep educational context explicit so each benchmark case is easy to analyze.
 
-**⚠️ Warning**: These contracts contain intentional vulnerabilities and should never be deployed to mainnet or used with real funds.
+## License
+
+MIT
