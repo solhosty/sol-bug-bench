@@ -7,12 +7,14 @@ import "../src/MultiSig.sol";
 contract MultiSigTest is Test {
     MultiSig internal multiSig;
 
+    // Test actors used across scenarios.
     address internal owner1 = address(1);
     address internal owner2 = address(2);
     address internal owner3 = address(3);
     address internal nonOwner = address(99);
 
     function setUp() public {
+        // Deploy a 2-of-3 wallet and pre-fund it for execution tests.
         address[] memory owners = new address[](3);
         owners[0] = owner1;
         owners[1] = owner2;
@@ -23,6 +25,7 @@ contract MultiSigTest is Test {
     }
 
     function testDeployment() public view {
+        // Validate constructor wiring and owner registration.
         assertEq(multiSig.required(), 2);
         assertEq(multiSig.owners(0), owner1);
         assertEq(multiSig.owners(1), owner2);
@@ -33,6 +36,7 @@ contract MultiSigTest is Test {
     }
 
     function testSubmitConfirmExecute() public {
+        // Full happy path: submit -> collect confirmations -> execute.
         address receiver = makeAddr("receiver");
 
         vm.prank(owner1);
@@ -52,12 +56,14 @@ contract MultiSigTest is Test {
     }
 
     function testRevertNonOwnerSubmit() public {
+        // Only wallet owners can create proposals.
         vm.prank(nonOwner);
         vm.expectRevert(bytes("not owner"));
         multiSig.submitTransaction(address(7), 1 ether, "");
     }
 
     function testRevertNonOwnerConfirm() public {
+        // Non-owners cannot participate in confirmations.
         vm.prank(owner1);
         multiSig.submitTransaction(address(7), 1 ether, "");
 
@@ -67,6 +73,7 @@ contract MultiSigTest is Test {
     }
 
     function testRevertExecuteInsufficientConfirmations() public {
+        // Execution must fail until the threshold is met.
         vm.prank(owner1);
         multiSig.submitTransaction(address(7), 1 ether, "");
 
@@ -78,6 +85,7 @@ contract MultiSigTest is Test {
     }
 
     function testRevokeConfirmation() public {
+        // An owner can withdraw their approval before execution.
         vm.prank(owner1);
         multiSig.submitTransaction(address(7), 1 ether, "");
 

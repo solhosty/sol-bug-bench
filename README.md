@@ -57,6 +57,25 @@ This repository is designed for:
 - Academic research in blockchain security
 - Developing and testing automated vulnerability scanners
 
+## Recent Additions
+
+### MultiSig Wallet Example
+This branch adds a minimal multi-signature wallet implementation at `src/MultiSig.sol` with
+an accompanying Foundry test suite in `test/MultiSig.t.sol`.
+
+The MultiSig contract now includes additional inline and NatSpec comments to make core behavior
+easier to review, including:
+- Owner and transaction model expectations
+- Modifier guard intent (`onlyOwner`, `txExists`, `notExecuted`, `notConfirmed`)
+- Submit/confirm/revoke/execute flow semantics
+
+The test suite documents the behavior being validated for each scenario:
+- Deployment and owner configuration checks
+- Happy-path transaction submit/confirm/execute flow
+- Access-control reverts for non-owners
+- Execution revert when confirmations are below threshold
+- Confirmation revoke behavior
+
 ## Future Expansion
 
 We plan to expand this benchmark with:
