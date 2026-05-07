@@ -28,3 +28,7 @@ node_modules/
 Thumbs.db
 
 .output/
+
+# Local agent/tooling artifacts
+config.json
+foundry.lock
