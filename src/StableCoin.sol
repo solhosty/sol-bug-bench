@@ -30,6 +30,8 @@ contract TokenStreamer {
     error StreamEnded();
     error InvalidRecipient();
     error NotStreamCreator();
+    error NotStreamParticipant();
+    error EmptyStream();
 
     event StreamCreated(
         uint256 indexed streamId,
@@ -47,6 +49,17 @@ contract TokenStreamer {
         uint256 indexed streamId,
         address indexed sender,
         uint256 amount
+    );
+    event StreamCancelled(
+        uint256 indexed streamId,
+        address indexed canceller,
+        uint256 recipientPayout,
+        uint256 creatorRefund
+    );
+    event StreamRecipientUpdated(
+        uint256 indexed streamId,
+        address indexed oldRecipient,
+        address indexed newRecipient
     );
 
     struct Stream {
@@ -168,6 +181,73 @@ contract TokenStreamer {
         require(success, "Transfer failed");
 
         emit StreamWithdrawal(streamId, msg.sender, available);
+    }
+
+    function cancelStream(uint256 streamId) external {
+        Stream storage stream = streams[streamId];
+
+        if (!stream.exists) {
+            revert StreamNotFound();
+        }
+        if (msg.sender != stream.creator && msg.sender != stream.recipient) {
+            revert NotStreamParticipant();
+        }
+
+        uint256 totalRemaining = stream.totalDeposited - stream.totalWithdrawn;
+        if (totalRemaining == 0) {
+            revert EmptyStream();
+        }
+
+        uint256 recipientPayout = getAvailableTokens(streamId);
+        uint256 creatorRefund = totalRemaining - recipientPayout;
+
+        if (recipientPayout > 0) {
+            stream.totalWithdrawn += recipientPayout;
+        }
+        stream.exists = false;
+
+        if (recipientPayout > 0) {
+            bool recipientTransferSuccess = stablecoin.transfer(
+                stream.recipient,
+                recipientPayout
+            );
+            require(recipientTransferSuccess, "Transfer failed");
+        }
+
+        if (creatorRefund > 0) {
+            bool creatorTransferSuccess = stablecoin.transfer(
+                stream.creator,
+                creatorRefund
+            );
+            require(creatorTransferSuccess, "Transfer failed");
+        }
+
+        emit StreamCancelled(
+            streamId,
+            msg.sender,
+            recipientPayout,
+            creatorRefund
+        );
+    }
+
+    function updateStreamRecipient(uint256 streamId, address newRecipient) external {
+        Stream storage stream = streams[streamId];
+
+        if (!stream.exists) {
+            revert StreamNotFound();
+        }
+        if (stream.creator != msg.sender) {
+            revert NotStreamCreator();
+        }
+        if (newRecipient == address(0)) {
+            revert InvalidRecipient();
+        }
+
+        address oldRecipient = stream.recipient;
+        stream.recipient = newRecipient;
+        userStreams[newRecipient].push(streamId);
+
+        emit StreamRecipientUpdated(streamId, oldRecipient, newRecipient);
     }
 
     function getStreamRate(uint256 streamId) external view returns (uint256) {
