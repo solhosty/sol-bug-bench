@@ -88,6 +88,44 @@ Our native stablecoin provides price stability and serves as the backbone for th
 - Distribution Model: Linear time-based release with precise calculations
 - Stream Management: Multiple concurrent streams per user supported
 
+### 4. StakeToken & ValidatorStaking
+
+**File**: `src/StakeToken.sol`
+
+ValidatorStaking introduces a validator-focused staking market where participants lock STK, accrue rewards, and can be slashed for protocol offenses.
+
+**StakeToken Features:**
+- ERC20 stake asset dedicated to validator collateralization
+- Owner-controlled minting for deterministic test setup
+- Standard 18-decimal accounting for stake and rewards
+
+**ValidatorStaking Features:**
+- Permissionless validator enrollment with minimum stake threshold enforcement
+- Dedicated `slasher` role for offense processing, separate from owner account
+- Configurable offense penalties with treasury-directed slash settlement
+- Two-step unstaking flow (`requestUnstake` -> `completeUnstake`) with 7-day unbonding period
+- Owner-funded reward pool distributed pro-rata via cumulative `rewardPerTokenStored`
+
+**Roles and Responsibilities:**
+- **Owner**: Sets slasher, treasury, offense penalties, and funds reward pool
+- **Slasher**: Marks disputes and executes `slash()` on malicious validators
+- **Validator**: Stakes tokens, requests unstake, completes unbonding withdrawals, claims rewards
+
+**Offenses and Default Penalties:**
+- `DoubleSigning`: 50% slash
+- `Downtime`: 10% slash
+- `Misconduct`: 100% slash
+
+**Slashing Math:**
+- Exposed balance = `stakedAmount + unbondingAmount`
+- Slash amount = `exposed * slashPercentBps[offense] / 10_000`
+- Slashed funds transfer directly to protocol treasury
+
+**Reward Math:**
+- Funding updates accumulator: `rewardPerTokenStored += rewardAmount * REWARD_PRECISION / totalStaked`
+- Per-validator accrual: `pending = stakedAmount * rewardPerTokenStored / REWARD_PRECISION - rewardDebt`
+- Claim transfers accrued amount from pool reserves to validator
+
 ## User Flows
 
 ### Governance Participation Flow
@@ -137,14 +175,22 @@ DeFiHub Protocol
 │       ├── Dynamic Share Calculation
 │       ├── Automated Reward Distribution
 │       └── Time-locked Security Features
-└── StableCoin.sol
-    ├── StableCoin (ERC20)
-    │   ├── Gas-Optimized Implementation
-    │   └── Protocol Integration Support
-    └── TokenStreamer
-        ├── Continuous Distribution Engine
-        ├── Linear Release Calculations
-        └── Multi-Stream Management
+├── StableCoin.sol
+│   ├── StableCoin (ERC20)
+│   │   ├── Gas-Optimized Implementation
+│   │   └── Protocol Integration Support
+│   └── TokenStreamer
+│       ├── Continuous Distribution Engine
+│       ├── Linear Release Calculations
+│       └── Multi-Stream Management
+└── StakeToken.sol
+    ├── StakeToken (ERC20)
+    │   └── Validator Collateral Asset
+    └── ValidatorStaking
+        ├── Permissionless Validator Enrollment
+        ├── Slashing and Treasury Settlement
+        ├── Unbonding Lifecycle Management
+        └── Reward Accrual and Claims
 ```
 
 ## Security Features
@@ -215,6 +261,7 @@ forge test
 forge test --match-contract GovernanceTokenTest
 forge test --match-contract LiquidityPoolTest
 forge test --match-contract StableCoinTest
+forge test --match-contract StakeTokenTest
 
 # Detailed test output
 forge test -vvv

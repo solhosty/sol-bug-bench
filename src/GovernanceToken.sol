@@ -48,15 +48,12 @@ contract GroupStaking {
         token = GovernanceToken(tokenAddress);
     }
 
-    function createStakingGroup(
-        address[] memory members,
-        uint256[] memory weights
-    ) external returns (uint256 groupId) {
+    function createStakingGroup(address[] memory members, uint256[] memory weights)
+        external
+        returns (uint256 groupId)
+    {
         require(members.length > 0, "Empty members list");
-        require(
-            members.length == weights.length,
-            "Members and weights length mismatch"
-        );
+        require(members.length == weights.length, "Members and weights length mismatch");
 
         uint256 totalWeight = 0;
         for (uint256 i = 0; i < weights.length; i++) {
@@ -105,9 +102,7 @@ contract GroupStaking {
         }
     }
 
-    function getGroupInfo(
-        uint256 groupId
-    )
+    function getGroupInfo(uint256 groupId)
         external
         view
         returns (
@@ -123,7 +118,11 @@ contract GroupStaking {
         return (group.id, group.totalAmount, group.members, group.weights);
     }
 
-    function isMemberOfGroup(uint256 groupId, address user) external view returns (bool) {
+    function isMemberOfGroup(uint256 groupId, address user)
+        external
+        view
+        returns (bool)
+    {
         Group storage group = groups[groupId];
         if (!group.exists) {
             return false;

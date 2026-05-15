@@ -36,14 +36,10 @@ contract TokenStreamer {
         uint256 duration
     );
     event StreamWithdrawal(
-        uint256 indexed streamId,
-        address indexed recipient,
-        uint256 amount
+        uint256 indexed streamId, address indexed recipient, uint256 amount
     );
     event StreamDeposit(
-        uint256 indexed streamId,
-        address indexed sender,
-        uint256 amount
+        uint256 indexed streamId, address indexed sender, uint256 amount
     );
 
     struct Stream {
@@ -65,11 +61,10 @@ contract TokenStreamer {
         stablecoin = stablecoin_;
     }
 
-    function createStream(
-        address recipient,
-        uint256 amount,
-        uint256 duration
-    ) external returns (uint256 streamId) {
+    function createStream(address recipient, uint256 amount, uint256 duration)
+        external
+        returns (uint256 streamId)
+    {
         if (recipient == address(0)) {
             revert InvalidRecipient();
         }
@@ -177,9 +172,7 @@ contract TokenStreamer {
         return vested - stream.totalWithdrawn;
     }
 
-    function getStreamInfo(
-        uint256 streamId
-    )
+    function getStreamInfo(uint256 streamId)
         external
         view
         returns (
