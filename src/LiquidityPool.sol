@@ -92,7 +92,7 @@ contract LiquidityPool is Ownable {
      */
     function depositFor(address user) external payable {
         require(msg.value > 0, "Invalid deposit");
-        _processDeposit(user, msg.value, false);
+        _processDeposit(user, msg.value, true);
     }
 
     /**
