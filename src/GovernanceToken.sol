@@ -108,8 +108,17 @@ contract GroupStaking {
 
         group.totalAmount -= amount;
 
+        uint256 distributed;
+
         for (uint256 i = 0; i < group.members.length; i++) {
-            uint256 memberShare = (amount * group.weights[i]) / 100;
+            uint256 memberShare;
+            if (i < group.members.length - 1) {
+                memberShare = (amount * group.weights[i]) / 100;
+                distributed += memberShare;
+            } else {
+                // Last member receives residual dust from integer truncation.
+                memberShare = amount - distributed;
+            }
             if (memberShare > 0) {
                 bool success = token.transfer(group.members[i], memberShare);
                 require(success, "Transfer failed");
