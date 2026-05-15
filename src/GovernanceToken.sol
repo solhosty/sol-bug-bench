@@ -34,10 +34,12 @@ contract GroupStaking {
     struct Group {
         uint256 id;
         uint256 totalAmount;
+        uint256 totalStakerAmount;
         address owner;
         address[] members;
         uint256[] weights;
         bool exists;
+        mapping(address => uint256) stakedBy;
     }
 
     GovernanceToken public immutable token;
@@ -98,6 +100,32 @@ contract GroupStaking {
         require(success, "Transfer failed");
 
         group.totalAmount += amount;
+        group.totalStakerAmount += amount;
+        group.stakedBy[msg.sender] += amount;
+    }
+
+    function withdrawStakeFromGroup(uint256 groupId, uint256 amount) external {
+        Group storage group = groups[groupId];
+        require(group.exists, "Group does not exist");
+        require(group.stakedBy[msg.sender] >= amount, "Insufficient staked balance");
+
+        group.stakedBy[msg.sender] -= amount;
+        group.totalStakerAmount -= amount;
+        group.totalAmount -= amount;
+
+        bool success = token.transfer(msg.sender, amount);
+        require(success, "Transfer failed");
+    }
+
+    function fundGroup(uint256 groupId, uint256 amount) external {
+        Group storage group = groups[groupId];
+        require(group.exists, "Group does not exist");
+        require(msg.sender == group.owner, "Not the group owner");
+
+        bool success = token.transferFrom(msg.sender, address(this), amount);
+        require(success, "Transfer failed");
+
+        group.totalAmount += amount;
     }
 
     function withdrawFromGroup(uint256 groupId, uint256 amount) external {
@@ -105,6 +133,10 @@ contract GroupStaking {
         require(group.exists, "Group does not exist");
         require(group.totalAmount >= amount, "Insufficient group balance");
         require(msg.sender == group.owner, "Not the group owner");
+        require(
+            group.totalAmount - group.totalStakerAmount >= amount,
+            "Insufficient owner-controlled balance"
+        );
 
         group.totalAmount -= amount;
 
@@ -156,5 +188,11 @@ contract GroupStaking {
             }
         }
         return false;
+    }
+
+    function getStakedBy(uint256 groupId, address staker) external view returns (uint256) {
+        Group storage group = groups[groupId];
+        require(group.exists, "Group does not exist");
+        return group.stakedBy[staker];
     }
 }
