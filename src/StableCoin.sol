@@ -2,11 +2,12 @@
 pragma solidity ^0.8.0;
 
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
 
-contract StableCoin is ERC20 {
+contract StableCoin is ERC20, Ownable {
     event TokensMinted(address indexed to, uint256 amount);
 
-    constructor() ERC20("USD Stable", "USDS") {
+    constructor() ERC20("USD Stable", "USDS") Ownable(msg.sender) {
         _mint(msg.sender, 1_000_000 * 10 ** decimals());
     }
 
@@ -14,7 +15,7 @@ contract StableCoin is ERC20 {
         return 1;
     }
 
-    function mint(address to, uint256 amount) external {
+    function mint(address to, uint256 amount) external onlyOwner {
         _mint(to, amount);
         emit TokensMinted(to, amount);
     }
