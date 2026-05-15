@@ -29,6 +29,7 @@ contract TokenStreamer {
     error NotStreamRecipient();
     error StreamEnded();
     error InvalidRecipient();
+    error NotStreamCreator();
 
     event StreamCreated(
         uint256 indexed streamId,
@@ -49,6 +50,7 @@ contract TokenStreamer {
     );
 
     struct Stream {
+        address creator;
         address recipient;
         uint256 totalDeposited;
         uint256 totalWithdrawn;
@@ -92,6 +94,7 @@ contract TokenStreamer {
         nextStreamId += 1;
 
         streams[streamId] = Stream({
+            creator: msg.sender,
             recipient: recipient,
             totalDeposited: amount,
             totalWithdrawn: 0,
@@ -111,6 +114,9 @@ contract TokenStreamer {
         if (!stream.exists) {
             revert StreamNotFound();
         }
+        if (stream.creator != msg.sender) {
+            revert NotStreamCreator();
+        }
         if (amount == 0) {
             revert InvalidAmount();
         }
@@ -118,15 +124,25 @@ contract TokenStreamer {
             revert StreamEnded();
         }
         uint256 duration = stream.endTime - stream.startTime;
+        uint256 elapsed = block.timestamp - stream.startTime;
+        uint256 vested = (stream.totalDeposited * elapsed) / duration;
+        uint256 unvested = stream.totalDeposited - vested;
+        uint256 remainingDuration = duration - elapsed;
+
         uint256 newTotalDeposited = stream.totalDeposited + amount;
         if (newTotalDeposited / duration == 0) {
             revert ZeroStreamRate();
         }
 
+        uint256 newUnvested = unvested + amount;
+        uint256 newRemainingDuration =
+            (remainingDuration * newUnvested + unvested - 1) / unvested;
+
         bool success = stablecoin.transferFrom(msg.sender, address(this), amount);
         require(success, "Transfer failed");
 
-        stream.totalDeposited += amount;
+        stream.totalDeposited = newTotalDeposited;
+        stream.endTime = block.timestamp + newRemainingDuration;
 
         emit StreamDeposit(streamId, msg.sender, amount);
     }
