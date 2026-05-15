@@ -44,9 +44,14 @@ contract GroupStaking {
     uint256 public nextGroupId = 1;
 
     mapping(uint256 => Group) private groups;
+    mapping(address => mapping(address => bool)) public membershipConsent;
 
     constructor(address tokenAddress) {
         token = GovernanceToken(tokenAddress);
+    }
+
+    function setMembershipConsent(address creator, bool approved) external {
+        membershipConsent[msg.sender][creator] = approved;
     }
 
     function createStakingGroup(
@@ -74,6 +79,12 @@ contract GroupStaking {
         group.exists = true;
 
         for (uint256 i = 0; i < members.length; i++) {
+            if (members[i] != msg.sender) {
+                require(
+                    membershipConsent[members[i]][msg.sender],
+                    "Member has not consented"
+                );
+            }
             group.members.push(members[i]);
             group.weights.push(weights[i]);
         }
