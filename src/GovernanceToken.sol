@@ -15,7 +15,7 @@ contract GovernanceToken is ERC20, Ownable {
         _mint(to, amount);
     }
 
-    function updateUserStatus(address user, bool status) external {
+    function updateUserStatus(address user, bool status) external onlyOwner {
         blacklisted[user] = status;
     }
 
