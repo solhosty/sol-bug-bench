@@ -25,6 +25,16 @@ contract PoolShare is ERC20Burnable, Ownable {
     function mint(address to, uint256 amount) external onlyOwner {
         _mint(to, amount);
     }
+
+    /**
+     * @dev Burns pool share tokens from a user without requiring allowance
+     * Only callable by the pool contract to support withdrawals
+     * @param account The address whose tokens will be burned
+     * @param amount The amount of tokens to burn
+     */
+    function burnFromUser(address account, uint256 amount) external onlyOwner {
+        _burn(account, amount);
+    }
 }
 
 /**
@@ -103,8 +113,7 @@ contract LiquidityPool is Ownable {
         require(success, "Transfer failed");
 
         // Burn the shares to maintain proper accounting
-        shareToken.transferFrom(msg.sender, address(this), shares);
-        shareToken.burn(shares);
+        shareToken.burnFromUser(msg.sender, shares);
         emit Withdrawal(msg.sender, amount, shares);
     }
 
