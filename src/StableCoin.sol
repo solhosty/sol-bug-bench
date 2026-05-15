@@ -23,6 +23,7 @@ contract StableCoin is ERC20, Ownable {
 
 contract TokenStreamer {
     error InvalidAmount();
+    error ZeroStreamRate();
     error StreamNotFound();
     error InvalidStreamDuration();
     error NotStreamRecipient();
@@ -80,6 +81,9 @@ contract TokenStreamer {
         if (duration < 1 hours || duration > 365 days) {
             revert InvalidStreamDuration();
         }
+        if (amount / duration == 0) {
+            revert ZeroStreamRate();
+        }
 
         bool success = stablecoin.transferFrom(msg.sender, address(this), amount);
         require(success, "Transfer failed");
@@ -112,6 +116,11 @@ contract TokenStreamer {
         }
         if (block.timestamp >= stream.endTime) {
             revert StreamEnded();
+        }
+        uint256 duration = stream.endTime - stream.startTime;
+        uint256 newTotalDeposited = stream.totalDeposited + amount;
+        if (newTotalDeposited / duration == 0) {
+            revert ZeroStreamRate();
         }
 
         bool success = stablecoin.transferFrom(msg.sender, address(this), amount);
