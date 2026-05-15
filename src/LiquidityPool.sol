@@ -48,6 +48,10 @@ contract PoolShare is ERC20Burnable, Ownable {
 contract LiquidityPool is Ownable {
     PoolShare public immutable shareToken;
 
+    // Permanently locked bootstrap shares to prevent first-depositor inflation attacks.
+    uint256 public constant MINIMUM_INITIAL_SHARES = 1000;
+    address internal constant DEAD_SHARES_RECIPIENT = address(0x000000000000000000000000000000000000dEaD);
+
     // User reward balances tracked separately for efficiency
     mapping(address => uint256) public rewards;
     // Nonces for signature verification to prevent replay attacks
@@ -168,12 +172,17 @@ contract LiquidityPool is Ownable {
         // Calculate shares based on current pool ratio
         uint256 shares;
         if (shareToken.totalSupply() == 0) {
-            // First deposit gets 1:1 share ratio
-            shares = amount;
+            require(amount > MINIMUM_INITIAL_SHARES, "Deposit too small");
+
+            // Lock a small amount of shares forever so initial liquidity cannot be trivially dominated.
+            shareToken.mint(DEAD_SHARES_RECIPIENT, MINIMUM_INITIAL_SHARES);
+            shares = amount - MINIMUM_INITIAL_SHARES;
         } else {
             // Subsequent deposits get proportional shares
             shares = (amount * shareToken.totalSupply()) / address(this).balance;
         }
+
+        require(shares > 0, "Zero shares");
 
         // Mint shares to the user
         shareToken.mint(user, shares);
