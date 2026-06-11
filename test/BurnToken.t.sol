@@ -72,6 +72,17 @@ contract BurnTokenTest is Test {
         assertEq(burnToken.balanceOf(user2), 10_000 ether - burnAmount);
     }
 
+    function testBurnFromEmitsEvent() public {
+        uint256 burnAmount = 75 ether;
+
+        vm.prank(user1);
+        vm.expectEmit(true, false, false, true);
+        emit TokensBurned(user2, burnAmount);
+        burnToken.burnFrom(user2, burnAmount);
+
+        assertEq(burnToken.balanceOf(user2), 10_000 ether - burnAmount);
+    }
+
     function testTokenVaultDepositWithdraw() public {
         uint256 depositAmount = 500 ether;
         uint256 withdrawAmount = 200 ether;
@@ -119,6 +130,12 @@ contract BurnTokenTest is Test {
         vm.expectRevert(stdError.arithmeticError);
         tokenVault.withdraw(depositAmount + 1);
         vm.stopPrank();
+    }
+
+    function test_RevertWhen_DepositZero() public {
+        vm.prank(user1);
+        vm.expectRevert(TokenVault.InvalidAmount.selector);
+        tokenVault.deposit(0);
     }
 
     function testMintAccessControlIssue() public {

