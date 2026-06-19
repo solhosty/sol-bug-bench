@@ -2,11 +2,12 @@
 pragma solidity ^0.8.0;
 
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
 
-contract StableCoin is ERC20 {
+contract StableCoin is ERC20, Ownable {
     event TokensMinted(address indexed to, uint256 amount);
 
-    constructor() ERC20("USD Stable", "USDS") {
+    constructor() ERC20("USD Stable", "USDS") Ownable(msg.sender) {
         _mint(msg.sender, 1_000_000 * 10 ** decimals());
     }
 
@@ -14,7 +15,7 @@ contract StableCoin is ERC20 {
         return 1;
     }
 
-    function mint(address to, uint256 amount) external {
+    function mint(address to, uint256 amount) external onlyOwner {
         _mint(to, amount);
         emit TokensMinted(to, amount);
     }
@@ -22,11 +23,15 @@ contract StableCoin is ERC20 {
 
 contract TokenStreamer {
     error InvalidAmount();
+    error ZeroStreamRate();
     error StreamNotFound();
     error InvalidStreamDuration();
     error NotStreamRecipient();
     error StreamEnded();
     error InvalidRecipient();
+    error NotStreamCreator();
+    error NotStreamParticipant();
+    error EmptyStream();
 
     event StreamCreated(
         uint256 indexed streamId,
@@ -45,8 +50,20 @@ contract TokenStreamer {
         address indexed sender,
         uint256 amount
     );
+    event StreamCancelled(
+        uint256 indexed streamId,
+        address indexed canceller,
+        uint256 recipientPayout,
+        uint256 creatorRefund
+    );
+    event StreamRecipientUpdated(
+        uint256 indexed streamId,
+        address indexed oldRecipient,
+        address indexed newRecipient
+    );
 
     struct Stream {
+        address creator;
         address recipient;
         uint256 totalDeposited;
         uint256 totalWithdrawn;
@@ -79,6 +96,9 @@ contract TokenStreamer {
         if (duration < 1 hours || duration > 365 days) {
             revert InvalidStreamDuration();
         }
+        if (amount / duration == 0) {
+            revert ZeroStreamRate();
+        }
 
         bool success = stablecoin.transferFrom(msg.sender, address(this), amount);
         require(success, "Transfer failed");
@@ -87,6 +107,7 @@ contract TokenStreamer {
         nextStreamId += 1;
 
         streams[streamId] = Stream({
+            creator: msg.sender,
             recipient: recipient,
             totalDeposited: amount,
             totalWithdrawn: 0,
@@ -106,17 +127,35 @@ contract TokenStreamer {
         if (!stream.exists) {
             revert StreamNotFound();
         }
+        if (stream.creator != msg.sender) {
+            revert NotStreamCreator();
+        }
         if (amount == 0) {
             revert InvalidAmount();
         }
         if (block.timestamp >= stream.endTime) {
             revert StreamEnded();
         }
+        uint256 duration = stream.endTime - stream.startTime;
+        uint256 elapsed = block.timestamp - stream.startTime;
+        uint256 vested = (stream.totalDeposited * elapsed) / duration;
+        uint256 unvested = stream.totalDeposited - vested;
+        uint256 remainingDuration = duration - elapsed;
+
+        uint256 newTotalDeposited = stream.totalDeposited + amount;
+        if (newTotalDeposited / duration == 0) {
+            revert ZeroStreamRate();
+        }
+
+        uint256 newUnvested = unvested + amount;
+        uint256 newRemainingDuration =
+            (remainingDuration * newUnvested + unvested - 1) / unvested;
 
         bool success = stablecoin.transferFrom(msg.sender, address(this), amount);
         require(success, "Transfer failed");
 
-        stream.totalDeposited += amount;
+        stream.totalDeposited = newTotalDeposited;
+        stream.endTime = block.timestamp + newRemainingDuration;
 
         emit StreamDeposit(streamId, msg.sender, amount);
     }
@@ -142,6 +181,73 @@ contract TokenStreamer {
         require(success, "Transfer failed");
 
         emit StreamWithdrawal(streamId, msg.sender, available);
+    }
+
+    function cancelStream(uint256 streamId) external {
+        Stream storage stream = streams[streamId];
+
+        if (!stream.exists) {
+            revert StreamNotFound();
+        }
+        if (msg.sender != stream.creator && msg.sender != stream.recipient) {
+            revert NotStreamParticipant();
+        }
+
+        uint256 totalRemaining = stream.totalDeposited - stream.totalWithdrawn;
+        if (totalRemaining == 0) {
+            revert EmptyStream();
+        }
+
+        uint256 recipientPayout = getAvailableTokens(streamId);
+        uint256 creatorRefund = totalRemaining - recipientPayout;
+
+        if (recipientPayout > 0) {
+            stream.totalWithdrawn += recipientPayout;
+        }
+        stream.exists = false;
+
+        if (recipientPayout > 0) {
+            bool recipientTransferSuccess = stablecoin.transfer(
+                stream.recipient,
+                recipientPayout
+            );
+            require(recipientTransferSuccess, "Transfer failed");
+        }
+
+        if (creatorRefund > 0) {
+            bool creatorTransferSuccess = stablecoin.transfer(
+                stream.creator,
+                creatorRefund
+            );
+            require(creatorTransferSuccess, "Transfer failed");
+        }
+
+        emit StreamCancelled(
+            streamId,
+            msg.sender,
+            recipientPayout,
+            creatorRefund
+        );
+    }
+
+    function updateStreamRecipient(uint256 streamId, address newRecipient) external {
+        Stream storage stream = streams[streamId];
+
+        if (!stream.exists) {
+            revert StreamNotFound();
+        }
+        if (stream.creator != msg.sender) {
+            revert NotStreamCreator();
+        }
+        if (newRecipient == address(0)) {
+            revert InvalidRecipient();
+        }
+
+        address oldRecipient = stream.recipient;
+        stream.recipient = newRecipient;
+        userStreams[newRecipient].push(streamId);
+
+        emit StreamRecipientUpdated(streamId, oldRecipient, newRecipient);
     }
 
     function getStreamRate(uint256 streamId) external view returns (uint256) {

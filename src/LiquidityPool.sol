@@ -25,6 +25,16 @@ contract PoolShare is ERC20Burnable, Ownable {
     function mint(address to, uint256 amount) external onlyOwner {
         _mint(to, amount);
     }
+
+    /**
+     * @dev Burns pool share tokens from a user without requiring allowance
+     * Only callable by the pool contract to support withdrawals
+     * @param account The address whose tokens will be burned
+     * @param amount The amount of tokens to burn
+     */
+    function burnFromUser(address account, uint256 amount) external onlyOwner {
+        _burn(account, amount);
+    }
 }
 
 /**
@@ -37,6 +47,10 @@ contract PoolShare is ERC20Burnable, Ownable {
  */
 contract LiquidityPool is Ownable {
     PoolShare public immutable shareToken;
+
+    // Permanently locked bootstrap shares to prevent first-depositor inflation attacks.
+    uint256 public constant MINIMUM_INITIAL_SHARES = 1000;
+    address internal constant DEAD_SHARES_RECIPIENT = address(0x000000000000000000000000000000000000dEaD);
 
     // User reward balances tracked separately for efficiency
     mapping(address => uint256) public rewards;
@@ -78,7 +92,7 @@ contract LiquidityPool is Ownable {
      */
     function depositFor(address user) external payable {
         require(msg.value > 0, "Invalid deposit");
-        _processDeposit(user, msg.value, false);
+        _processDeposit(user, msg.value, true);
     }
 
     /**
@@ -103,8 +117,7 @@ contract LiquidityPool is Ownable {
         require(success, "Transfer failed");
 
         // Burn the shares to maintain proper accounting
-        shareToken.transferFrom(msg.sender, address(this), shares);
-        shareToken.burn(shares);
+        shareToken.burnFromUser(msg.sender, shares);
         emit Withdrawal(msg.sender, amount, shares);
     }
 
@@ -159,12 +172,17 @@ contract LiquidityPool is Ownable {
         // Calculate shares based on current pool ratio
         uint256 shares;
         if (shareToken.totalSupply() == 0) {
-            // First deposit gets 1:1 share ratio
-            shares = amount;
+            require(amount > MINIMUM_INITIAL_SHARES, "Deposit too small");
+
+            // Lock a small amount of shares forever so initial liquidity cannot be trivially dominated.
+            shareToken.mint(DEAD_SHARES_RECIPIENT, MINIMUM_INITIAL_SHARES);
+            shares = amount - MINIMUM_INITIAL_SHARES;
         } else {
             // Subsequent deposits get proportional shares
             shares = (amount * shareToken.totalSupply()) / address(this).balance;
         }
+
+        require(shares > 0, "Zero shares");
 
         // Mint shares to the user
         shareToken.mint(user, shares);

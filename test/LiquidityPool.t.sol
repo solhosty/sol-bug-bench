@@ -53,7 +53,7 @@ contract LiquidityPoolTest is Test {
 
         assertEq(shareToken.balanceOf(user1), depositAmount);
         assertEq(pool.rewards(user1), (depositAmount * pool.REWARD_RATE()) / 100);
-        assertEq(pool.lastDepositTime(user1), 0);
+        assertEq(pool.lastDepositTime(user1), block.timestamp);
         assertEq(address(pool).balance, depositAmount);
     }
 
@@ -244,7 +244,8 @@ contract LiquidityPoolTest is Test {
 
         uint256 secondDepositTime = pool.lastDepositTime(user1);
 
-        assertEq(secondDepositTime, firstDepositTime);
+        assertGt(secondDepositTime, firstDepositTime);
+        assertEq(secondDepositTime, block.timestamp);
     }
 
     function testDepositForGriefingMitigated() public {
@@ -258,15 +259,19 @@ contract LiquidityPoolTest is Test {
         skip(pool.WITHDRAWAL_DELAY() - 1 hours);
 
         vm.prank(user2);
-        pool.depositFor{value: 1}(user1);
+        pool.depositFor{value: 1 ether}(user1);
 
-        assertEq(pool.lastDepositTime(user1), firstDepositTime);
+        assertGt(pool.lastDepositTime(user1), firstDepositTime);
 
         vm.startPrank(user1);
         uint256 userShares = shareToken.balanceOf(user1);
         shareToken.approve(address(pool), userShares);
 
         skip(1 hours);
+        vm.expectRevert("Withdrawal delay not met");
+        pool.withdraw(userShares);
+
+        skip(pool.WITHDRAWAL_DELAY() - 1 hours);
         pool.withdraw(userShares);
         vm.stopPrank();
 

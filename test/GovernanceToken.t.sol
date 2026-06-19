@@ -28,6 +28,13 @@ contract GovernanceTokenTest is Test {
         token.transfer(user3, 1000 * 10 ** 18);
     }
 
+    function approveMembership(address[] memory members) internal {
+        for (uint256 i = 0; i < members.length; i++) {
+            vm.prank(members[i]);
+            staking.setMembershipConsent(address(this), true);
+        }
+    }
+
     // GovernanceToken Tests
     function testInitialSupply() public {
         assertEq(token.totalSupply(), 1000000 * 10 ** 18);
@@ -199,6 +206,8 @@ contract GovernanceTokenTest is Test {
         weights[1] = 35;
         weights[2] = 25;
 
+        approveMembership(members);
+
         uint256 groupId = staking.createStakingGroup(members, weights);
         assertEq(groupId, 1);
 
@@ -227,6 +236,8 @@ contract GovernanceTokenTest is Test {
         weights[0] = 60;
         weights[1] = 40;
 
+        approveMembership(members);
+
         uint256 groupId = staking.createStakingGroup(members, weights);
 
         // Approve and stake tokens
@@ -239,10 +250,11 @@ contract GovernanceTokenTest is Test {
         (, uint256 totalAmount,,) = staking.getGroupInfo(groupId);
         assertEq(totalAmount, stakeAmount);
         assertEq(token.balanceOf(address(staking)), stakeAmount);
+        assertEq(staking.getStakedBy(groupId, user1), stakeAmount);
     }
 
     function testWithdrawFromGroup() public {
-        // Create group and stake tokens
+        // Create group and fund owner-controlled tokens
         address[] memory members = new address[](2);
         members[0] = user1;
         members[1] = user2;
@@ -251,13 +263,13 @@ contract GovernanceTokenTest is Test {
         weights[0] = 60;
         weights[1] = 40;
 
+        approveMembership(members);
+
         uint256 groupId = staking.createStakingGroup(members, weights);
 
-        uint256 stakeAmount = 100 * 10 ** 18;
-        vm.startPrank(user1);
-        token.approve(address(staking), stakeAmount);
-        staking.stakeToGroup(groupId, stakeAmount);
-        vm.stopPrank();
+        uint256 fundAmount = 100 * 10 ** 18;
+        token.approve(address(staking), fundAmount);
+        staking.fundGroup(groupId, fundAmount);
 
         // Record balances before withdrawal
         uint256 member1BalanceBefore = token.balanceOf(user1);
@@ -277,7 +289,7 @@ contract GovernanceTokenTest is Test {
 
         // Check remaining group balance
         (, uint256 totalAmount,,) = staking.getGroupInfo(groupId);
-        assertEq(totalAmount, stakeAmount - withdrawAmount);
+        assertEq(totalAmount, fundAmount - withdrawAmount);
     }
 
     function testWithdrawFromGroupWithBlacklistedMember() public {
@@ -290,13 +302,13 @@ contract GovernanceTokenTest is Test {
         weights[0] = 60;
         weights[1] = 40;
 
+        approveMembership(members);
+
         uint256 groupId = staking.createStakingGroup(members, weights);
 
-        uint256 stakeAmount = 100 * 10 ** 18;
-        vm.startPrank(user1);
-        token.approve(address(staking), stakeAmount);
-        staking.stakeToGroup(groupId, stakeAmount);
-        vm.stopPrank();
+        uint256 fundAmount = 100 * 10 ** 18;
+        token.approve(address(staking), fundAmount);
+        staking.fundGroup(groupId, fundAmount);
 
         // Blacklist user2
         token.updateUserStatus(user2, true);
@@ -307,6 +319,67 @@ contract GovernanceTokenTest is Test {
         staking.withdrawFromGroup(groupId, withdrawAmount);
     }
 
+    function testGroupOwnerCannotWithdrawStakerOwnedFunds() public {
+        address[] memory members = new address[](2);
+        members[0] = user1;
+        members[1] = user2;
+
+        uint256[] memory weights = new uint256[](2);
+        weights[0] = 60;
+        weights[1] = 40;
+
+        approveMembership(members);
+
+        uint256 groupId = staking.createStakingGroup(members, weights);
+
+        uint256 stakeAmount = 100 * 10 ** 18;
+        vm.startPrank(user1);
+        token.approve(address(staking), stakeAmount);
+        staking.stakeToGroup(groupId, stakeAmount);
+        vm.stopPrank();
+
+        vm.expectRevert("Insufficient owner-controlled balance");
+        staking.withdrawFromGroup(groupId, 1);
+    }
+
+    function testWithdrawStakeFromGroup() public {
+        address[] memory members = new address[](2);
+        members[0] = user1;
+        members[1] = user2;
+
+        uint256[] memory weights = new uint256[](2);
+        weights[0] = 60;
+        weights[1] = 40;
+
+        approveMembership(members);
+
+        uint256 groupId = staking.createStakingGroup(members, weights);
+
+        uint256 user1Stake = 100 * 10 ** 18;
+        uint256 user2Stake = 50 * 10 ** 18;
+
+        vm.startPrank(user1);
+        token.approve(address(staking), user1Stake);
+        staking.stakeToGroup(groupId, user1Stake);
+        vm.stopPrank();
+
+        vm.startPrank(user2);
+        token.approve(address(staking), user2Stake);
+        staking.stakeToGroup(groupId, user2Stake);
+        vm.stopPrank();
+
+        uint256 user2BalanceBefore = token.balanceOf(user2);
+
+        vm.prank(user2);
+        staking.withdrawStakeFromGroup(groupId, user2Stake);
+
+        assertEq(staking.getStakedBy(groupId, user2), 0);
+        assertEq(token.balanceOf(user2), user2BalanceBefore + user2Stake);
+
+        (, uint256 totalAmount,,) = staking.getGroupInfo(groupId);
+        assertEq(totalAmount, user1Stake);
+    }
+
     function testGroupMembership() public {
         address[] memory members = new address[](2);
         members[0] = user1;
@@ -315,6 +388,8 @@ contract GovernanceTokenTest is Test {
         uint256[] memory weights = new uint256[](2);
         weights[0] = 50;
         weights[1] = 50;
+
+        approveMembership(members);
 
         uint256 groupId = staking.createStakingGroup(members, weights);
 
@@ -377,6 +452,8 @@ contract GovernanceTokenTest is Test {
         weights[0] = 60;
         weights[1] = 40;
 
+        approveMembership(members);
+
         uint256 groupId = staking.createStakingGroup(members, weights);
 
         uint256 stakeAmount = 100 * 10 ** 18;
@@ -407,6 +484,8 @@ contract GovernanceTokenTest is Test {
         uint256[] memory weights = new uint256[](2);
         weights[0] = 60;
         weights[1] = 40;
+
+        approveMembership(members);
 
         uint256 groupId = staking.createStakingGroup(members, weights);
 

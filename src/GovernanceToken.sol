@@ -2,19 +2,20 @@
 pragma solidity ^0.8.0;
 
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
 
-contract GovernanceToken is ERC20 {
+contract GovernanceToken is ERC20, Ownable {
     mapping(address => bool) public blacklisted;
 
-    constructor() ERC20("DeFiHub Governance", "DFHG") {
+    constructor() ERC20("DeFiHub Governance", "DFHG") Ownable(msg.sender) {
         _mint(msg.sender, 1_000_000 * 10 ** 18);
     }
 
-    function mint(address to, uint256 amount) external {
+    function mint(address to, uint256 amount) external onlyOwner {
         _mint(to, amount);
     }
 
-    function updateUserStatus(address user, bool status) external {
+    function updateUserStatus(address user, bool status) external onlyOwner {
         blacklisted[user] = status;
     }
 
@@ -33,19 +34,26 @@ contract GroupStaking {
     struct Group {
         uint256 id;
         uint256 totalAmount;
+        uint256 totalStakerAmount;
         address owner;
         address[] members;
         uint256[] weights;
         bool exists;
+        mapping(address => uint256) stakedBy;
     }
 
     GovernanceToken public immutable token;
     uint256 public nextGroupId = 1;
 
     mapping(uint256 => Group) private groups;
+    mapping(address => mapping(address => bool)) public membershipConsent;
 
     constructor(address tokenAddress) {
         token = GovernanceToken(tokenAddress);
+    }
+
+    function setMembershipConsent(address creator, bool approved) external {
+        membershipConsent[msg.sender][creator] = approved;
     }
 
     function createStakingGroup(
@@ -73,6 +81,12 @@ contract GroupStaking {
         group.exists = true;
 
         for (uint256 i = 0; i < members.length; i++) {
+            if (members[i] != msg.sender) {
+                require(
+                    membershipConsent[members[i]][msg.sender],
+                    "Member has not consented"
+                );
+            }
             group.members.push(members[i]);
             group.weights.push(weights[i]);
         }
@@ -86,6 +100,32 @@ contract GroupStaking {
         require(success, "Transfer failed");
 
         group.totalAmount += amount;
+        group.totalStakerAmount += amount;
+        group.stakedBy[msg.sender] += amount;
+    }
+
+    function withdrawStakeFromGroup(uint256 groupId, uint256 amount) external {
+        Group storage group = groups[groupId];
+        require(group.exists, "Group does not exist");
+        require(group.stakedBy[msg.sender] >= amount, "Insufficient staked balance");
+
+        group.stakedBy[msg.sender] -= amount;
+        group.totalStakerAmount -= amount;
+        group.totalAmount -= amount;
+
+        bool success = token.transfer(msg.sender, amount);
+        require(success, "Transfer failed");
+    }
+
+    function fundGroup(uint256 groupId, uint256 amount) external {
+        Group storage group = groups[groupId];
+        require(group.exists, "Group does not exist");
+        require(msg.sender == group.owner, "Not the group owner");
+
+        bool success = token.transferFrom(msg.sender, address(this), amount);
+        require(success, "Transfer failed");
+
+        group.totalAmount += amount;
     }
 
     function withdrawFromGroup(uint256 groupId, uint256 amount) external {
@@ -93,11 +133,24 @@ contract GroupStaking {
         require(group.exists, "Group does not exist");
         require(group.totalAmount >= amount, "Insufficient group balance");
         require(msg.sender == group.owner, "Not the group owner");
+        require(
+            group.totalAmount - group.totalStakerAmount >= amount,
+            "Insufficient owner-controlled balance"
+        );
 
         group.totalAmount -= amount;
 
+        uint256 distributed;
+
         for (uint256 i = 0; i < group.members.length; i++) {
-            uint256 memberShare = (amount * group.weights[i]) / 100;
+            uint256 memberShare;
+            if (i < group.members.length - 1) {
+                memberShare = (amount * group.weights[i]) / 100;
+                distributed += memberShare;
+            } else {
+                // Last member receives residual dust from integer truncation.
+                memberShare = amount - distributed;
+            }
             if (memberShare > 0) {
                 bool success = token.transfer(group.members[i], memberShare);
                 require(success, "Transfer failed");
@@ -135,5 +188,11 @@ contract GroupStaking {
             }
         }
         return false;
+    }
+
+    function getStakedBy(uint256 groupId, address staker) external view returns (uint256) {
+        Group storage group = groups[groupId];
+        require(group.exists, "Group does not exist");
+        return group.stakedBy[staker];
     }
 }
