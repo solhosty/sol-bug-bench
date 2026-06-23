@@ -97,15 +97,19 @@ contract GovernanceTokenInvariantTest is Test {
     }
 
     /// GT-G2: only a privileged admin may change blacklist status.
-    /// `updateUserStatus` is permissionless.
+    /// Non-owner calls must revert.
     function test_GT_G2_anyoneCanBlacklist() public {
         address victim = address(0xCAFE);
         address stranger = address(0xDEAD);
 
         vm.prank(stranger);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                bytes4(keccak256("OwnableUnauthorizedAccount(address)")),
+                stranger
+            )
+        );
         token.updateUserStatus(victim, true);
-
-        assertTrue(token.blacklisted(victim));
     }
 
     /// GS-G1: the staking contract's token balance must equal the sum of all
