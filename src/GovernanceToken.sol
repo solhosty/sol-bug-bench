@@ -2,11 +2,12 @@
 pragma solidity ^0.8.0;
 
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
 
-contract GovernanceToken is ERC20 {
+contract GovernanceToken is ERC20, Ownable {
     mapping(address => bool) public blacklisted;
 
-    constructor() ERC20("DeFiHub Governance", "DFHG") {
+    constructor() ERC20("DeFiHub Governance", "DFHG") Ownable(msg.sender) {
         _mint(msg.sender, 1_000_000 * 10 ** 18);
     }
 
@@ -14,7 +15,7 @@ contract GovernanceToken is ERC20 {
         _mint(to, amount);
     }
 
-    function updateUserStatus(address user, bool status) external {
+    function updateUserStatus(address user, bool status) external onlyOwner {
         blacklisted[user] = status;
     }
 
