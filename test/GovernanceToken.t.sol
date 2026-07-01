@@ -2,6 +2,7 @@
 pragma solidity ^0.8.0;
 
 import "forge-std/Test.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
 import "../src/GovernanceToken.sol";
 
 contract GovernanceTokenTest is Test {
@@ -56,6 +57,19 @@ contract GovernanceTokenTest is Test {
         // Unblacklist user1
         token.updateUserStatus(user1, false);
         assertFalse(token.blacklisted(user1));
+    }
+
+    function testUpdateUserStatusRevertsForNonOwner() public {
+        address randomAddress = address(0xBEEF);
+
+        vm.prank(randomAddress);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                Ownable.OwnableUnauthorizedAccount.selector,
+                randomAddress
+            )
+        );
+        token.updateUserStatus(user1, true);
     }
 
     function testTransferWithBlacklist() public {
@@ -267,7 +281,17 @@ contract GovernanceTokenTest is Test {
         uint256 withdrawAmount = 50 * 10 ** 18;
         staking.withdrawFromGroup(groupId, withdrawAmount);
 
-        // Check balances after withdrawal
+        // Check claimable balances after withdrawal
+        assertEq(staking.claimable(groupId, user1), withdrawAmount * 60 / 100);
+        assertEq(staking.claimable(groupId, user2), withdrawAmount * 40 / 100);
+
+        // Members can claim their shares
+        vm.prank(user1);
+        staking.claim(groupId);
+        vm.prank(user2);
+        staking.claim(groupId);
+
+        // Check balances after claiming
         assertEq(
             token.balanceOf(user1), member1BalanceBefore + (withdrawAmount * 60 / 100)
         );
@@ -281,7 +305,6 @@ contract GovernanceTokenTest is Test {
     }
 
     function testWithdrawFromGroupWithBlacklistedMember() public {
-        // Test the bug where blacklisted member blocks all distributions
         address[] memory members = new address[](2);
         members[0] = user1;
         members[1] = user2;
@@ -301,10 +324,54 @@ contract GovernanceTokenTest is Test {
         // Blacklist user2
         token.updateUserStatus(user2, true);
 
-        // Try to withdraw as the group owner - should fail because user2 is blacklisted
+        // Withdraw should still succeed and credit claimable balances
         uint256 withdrawAmount = 50 * 10 ** 18;
-        vm.expectRevert("Recipient is blacklisted");
         staking.withdrawFromGroup(groupId, withdrawAmount);
+
+        assertEq(staking.claimable(groupId, user1), withdrawAmount * 60 / 100);
+        assertEq(staking.claimable(groupId, user2), withdrawAmount * 40 / 100);
+
+        uint256 user1BalanceBefore = token.balanceOf(user1);
+        vm.prank(user1);
+        staking.claim(groupId);
+        assertEq(token.balanceOf(user1), user1BalanceBefore + (withdrawAmount * 60 / 100));
+
+        vm.prank(user2);
+        vm.expectRevert("Recipient is blacklisted");
+        staking.claim(groupId);
+
+        token.updateUserStatus(user2, false);
+        uint256 user2BalanceBefore = token.balanceOf(user2);
+        vm.prank(user2);
+        staking.claim(groupId);
+        assertEq(token.balanceOf(user2), user2BalanceBefore + (withdrawAmount * 40 / 100));
+    }
+
+    function testClaimDoubleClaimRevertsOnZero() public {
+        address[] memory members = new address[](2);
+        members[0] = user1;
+        members[1] = user2;
+
+        uint256[] memory weights = new uint256[](2);
+        weights[0] = 60;
+        weights[1] = 40;
+
+        uint256 groupId = staking.createStakingGroup(members, weights);
+
+        uint256 stakeAmount = 100 * 10 ** 18;
+        vm.startPrank(user1);
+        token.approve(address(staking), stakeAmount);
+        staking.stakeToGroup(groupId, stakeAmount);
+        vm.stopPrank();
+
+        staking.withdrawFromGroup(groupId, 50 * 10 ** 18);
+
+        vm.prank(user1);
+        staking.claim(groupId);
+
+        vm.prank(user1);
+        vm.expectRevert("No claimable amount");
+        staking.claim(groupId);
     }
 
     function testGroupMembership() public {
