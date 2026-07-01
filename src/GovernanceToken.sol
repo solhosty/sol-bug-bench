@@ -2,11 +2,12 @@
 pragma solidity ^0.8.0;
 
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
 
-contract GovernanceToken is ERC20 {
+contract GovernanceToken is ERC20, Ownable {
     mapping(address => bool) public blacklisted;
 
-    constructor() ERC20("DeFiHub Governance", "DFHG") {
+    constructor() ERC20("DeFiHub Governance", "DFHG") Ownable(msg.sender) {
         _mint(msg.sender, 1_000_000 * 10 ** 18);
     }
 
@@ -14,7 +15,7 @@ contract GovernanceToken is ERC20 {
         _mint(to, amount);
     }
 
-    function updateUserStatus(address user, bool status) external {
+    function updateUserStatus(address user, bool status) external onlyOwner {
         blacklisted[user] = status;
     }
 
@@ -41,6 +42,7 @@ contract GroupStaking {
 
     GovernanceToken public immutable token;
     uint256 public nextGroupId = 1;
+    mapping(uint256 => mapping(address => uint256)) public claimable;
 
     mapping(uint256 => Group) private groups;
 
@@ -99,10 +101,19 @@ contract GroupStaking {
         for (uint256 i = 0; i < group.members.length; i++) {
             uint256 memberShare = (amount * group.weights[i]) / 100;
             if (memberShare > 0) {
-                bool success = token.transfer(group.members[i], memberShare);
-                require(success, "Transfer failed");
+                claimable[groupId][group.members[i]] += memberShare;
             }
         }
+    }
+
+    function claim(uint256 groupId) external {
+        uint256 amount = claimable[groupId][msg.sender];
+        require(amount > 0, "No claimable amount");
+
+        claimable[groupId][msg.sender] = 0;
+
+        bool success = token.transfer(msg.sender, amount);
+        require(success, "Transfer failed");
     }
 
     function getGroupInfo(

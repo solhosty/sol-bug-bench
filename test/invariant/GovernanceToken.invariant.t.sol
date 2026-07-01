@@ -2,6 +2,7 @@
 pragma solidity ^0.8.0;
 
 import "forge-std/Test.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
 import "../../src/GovernanceToken.sol";
 
 /// @dev Exercises GroupStaking with valid (weights == 100) groups so the
@@ -97,15 +98,21 @@ contract GovernanceTokenInvariantTest is Test {
     }
 
     /// GT-G2: only a privileged admin may change blacklist status.
-    /// `updateUserStatus` is permissionless.
+    /// `updateUserStatus` must revert for non-owner callers.
     function test_GT_G2_anyoneCanBlacklist() public {
         address victim = address(0xCAFE);
         address stranger = address(0xDEAD);
 
         vm.prank(stranger);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                Ownable.OwnableUnauthorizedAccount.selector,
+                stranger
+            )
+        );
         token.updateUserStatus(victim, true);
 
-        assertTrue(token.blacklisted(victim));
+        assertFalse(token.blacklisted(victim));
     }
 
     /// GS-G1: the staking contract's token balance must equal the sum of all
@@ -126,7 +133,14 @@ contract GovernanceTokenInvariantTest is Test {
         token.approve(address(staking), 100);
         staking.stakeToGroup(id, 100);
 
-        staking.withdrawFromGroup(id, 99); // distributes 33 + 32 + 32 = 97
+        staking.withdrawFromGroup(id, 99);
+
+        vm.prank(m[0]);
+        staking.claim(id);
+        vm.prank(m[1]);
+        staking.claim(id);
+        vm.prank(m[2]);
+        staking.claim(id);
 
         (, uint256 total,,) = staking.getGroupInfo(id);
         // Accounting says 1 remains; the contract actually holds 3 (dust = 2).
@@ -136,8 +150,7 @@ contract GovernanceTokenInvariantTest is Test {
     }
 
     /// GS-F1: a withdrawal must not be permanently blockable by a single
-    /// member's state. Blacklisting one member reverts the whole distribution,
-    /// freezing the group's funds.
+    /// member's state.
     function test_GS_F1_blacklistedMemberFreezesGroup() public {
         address[] memory m = new address[](3);
         m[0] = address(0xA1);
@@ -152,10 +165,17 @@ contract GovernanceTokenInvariantTest is Test {
         token.approve(address(staking), 100);
         staking.stakeToGroup(id, 100);
 
-        // Anyone can blacklist a member (see GT-G2).
         token.updateUserStatus(m[0], true);
 
-        vm.expectRevert(bytes("Recipient is blacklisted"));
         staking.withdrawFromGroup(id, 100);
+
+        vm.prank(m[1]);
+        staking.claim(id);
+        vm.prank(m[2]);
+        staking.claim(id);
+
+        vm.prank(m[0]);
+        vm.expectRevert(bytes("Recipient is blacklisted"));
+        staking.claim(id);
     }
 }
